@@ -368,6 +368,372 @@ hook warms them all.
 **Verified:** `bash .claude/bootstrap.sh` discovers and warms `App/App.mpr`, and
 `./mxcli run --local -p App/App.mpr` boots to HTTP 200 (see the summary table).
 
+## 13. A microflow datasource's argument parses but is never persisted (CE1571)
+
+**The single most disruptive bug found.** A user task page receives one
+parameter, `$Task: System.WorkflowUserTask`, so the natural way to show the
+issue under handling is a microflow datasource taking the task:
+
+```mdl
+dataview dvIssue (datasource: microflow IssueTracker.SUB_Issue_FromTask(Task: $Task)) { ... }
+```
+
+Three forms were tried. Only one parses:
+
+| Form | `mxcli check` |
+| --- | --- |
+| `microflow M.F($Task)` | parse error — `mismatched input ')' expecting '='` |
+| `microflow M.F(Task: $Task)` | **passes** |
+| `microflow M.F(Task = $Task)` | parse error — `expecting ':'` |
+
+But the form that parses is **silently dropped on write**. `mx check` then fails:
+
+```
+[error] [CE1571] "No argument has been selected for parameter 'Task' and no
+default is available. Please select an argument manually." at Data view 'dvIssue'
+```
+
+Verified by dumping the written page — the datasource has the microflow but no
+argument mapping. The parameterless form (`datasource: microflow M.F`) fails the
+same way, because Mendix does not auto-map page parameters into a microflow
+datasource.
+
+**Workaround used:** reach the issue with a **database datasource + XPath
+constraint** back through the task's workflow, which does persist correctly:
+
+```mdl
+datagrid dgIssue (
+  datasource: database from IssueTracker.Issue
+    where [IssueTracker.Issue_Workflow = $Task/System.WorkflowUserTask_Workflow]
+)
+```
+
+That is why `IssueTracker.Issue_Workflow` (Issue → System.Workflow) exists at
+all: `ACT_Issue_StartWorkflow` sets it so task pages can navigate back.
+
+**Suggested fix:** persist the parsed `(Param: $value)` mapping, and reject the
+argumentless form at check time instead of letting it reach MxBuild.
+
+## 14. A nested reverse association path into a custom module writes a *corrupt* .mpr
+
+Worse than a build error — this one made the project **unloadable**:
+
+```mdl
+dataview dvWf (datasource: $Task/System.WorkflowUserTask_Workflow) {
+  gallery galIssue (datasource: $currentObject/IssueTracker.Issue_Workflow) { ... }
+}
+```
+
+`mx check` could not even parse the model afterwards:
+
+```
+ERROR: System.InvalidOperationException: An error occurred when trying to set the
+'DestinationEntity' property of a Entity ref step in a Page with ID e2d2167e-…
+ ---> System.ArgumentNullException: Value cannot be null. (Parameter 'value')
+```
+
+Not a validation error — a **load** failure. Studio Pro would not open the
+project either. `mxcli` itself still read the file (it has its own reader), which
+is what made recovery possible: `drop page` on the offending page restored a
+loadable model.
+
+**Isolated by bisection** — the trigger is specifically the *nested reverse*
+step, from a System entity back into a custom module:
+
+| Datasource | Result |
+| --- | --- |
+| `$Issue/IssueTracker.Comment_Issue` (same module, reverse) | ✅ 0 errors |
+| `$Task/System.WorkflowUserTask_Workflow` (forward into System) | ✅ 0 errors |
+| the two nested, System → custom module reverse | ❌ **.mpr unloadable** |
+
+**Suggested fix:** resolve `DestinationEntity` for a reverse cross-module ref
+step, or refuse to write the page. Emitting a structurally invalid unit is the
+worst possible failure mode — it takes the whole project down, not one page.
+
+**Lesson:** run `mx check` after every page batch, not at the end. And keep the
+MDL in files under git — replaying `mdl/*.mdl` was the recovery plan.
+
+## 15. `annotation` in a workflow body makes the model unloadable
+
+The workflow skill documents a sticky-note annotation activity:
+
+```mdl
+annotation 'Escalation path per policy 4.2';
+```
+
+It passes `mxcli check` and executes, but the model then cannot be loaded:
+
+```
+ERROR: System.InvalidOperationException: Type Mendix.Modeler.Workflows.Model.Annotation
+does not contain a constructor with a parameter of type Mendix.Modeler.Workflows.Model.Flow.
+```
+
+mxcli places the Annotation in the activity flow, where Mendix expects a Flow
+element. Same severity as finding 14 — recovery was `create or replace workflow`
+without the annotations, then re-running the phase that binds to it.
+
+## 16. `jump to <Task>` writes a comment instead of a target (CE6680 + CE0495)
+
+The documented loop construct does not build. `jump to Triage;` round-trips as:
+
+```mdl
+jump to Triage comment 'Triage';
+```
+
+— the target ends up as the activity's *comment*, the `Target` property is left
+unset, and the Jump activity is *named* after its target, colliding with the
+user task of that name:
+
+```
+[error] [CE6680] "The 'Target' property is required." at Jump 'Triage'
+[error] [CE0495] "Duplicate name 'Triage'." at User task 'Triage the issue', Jump 'Triage'
+```
+
+This also kills interrupting timer boundary events, because
+`CE6665 "Interrupting timer boundary event must end with a jump or end activity"`
+demands a jump that cannot be written.
+
+**Workaround used:** the NeedsInfo and Reopen loops are implemented in the
+outcome-handler microflows (`ACT_Task_WorkBlock`, `ACT_Task_VerifyReopen`), which
+clear `Issue_Workflow` and call `ACT_Issue_StartWorkflow` to begin a fresh
+instance. Same user-visible behaviour — the issue goes back round — without an
+unbuildable Jump.
+
+## 17. `decision '<expression>'` yields CE0117; and the context variable is renamed
+
+`write-workflows.md` documents an expression-form decision:
+
+```mdl
+decision '$workflowContext/Priority = IssueTracker.IssuePriority.Critical'
+  outcomes true -> { … } false -> { … };
+```
+
+It parses and executes, but builds as `CE0117 "Error(s) in expression."` The
+`mxcli syntax workflow.decision` registry shows a *different* shape
+(`DECISION ['<caption>'] OUTCOMES '<outcome>' { … }`), so the grammar accepts one
+form while the writer/registry expect another.
+
+Related, and useful: `DESCRIBE WORKFLOW` reveals that mxcli **renames the context
+parameter**. Declaring `parameter $Context: IssueTracker.Issue` stores
+`parameter $WorkflowContext: …` and call mappings become `'$WorkflowContext'`.
+The literal `'$workflowContext'` in a `call microflow … with (…)` mapping *does*
+build correctly — only the decision expression fails.
+
+**Workaround used:** dropped the decision node; the critical-priority escalation
+now happens inside `SUB_Issue_SetTriaged`, which is arguably where that policy
+belongs anyway.
+
+## 18. A token in an XPath constraint loses its quotes as soon as `and` is added
+
+Mendix requires tokens quoted in XPath: `'[%CurrentUser%]'`. mxcli gets this
+right for a lone condition and **wrong** the moment the constraint is compound.
+Dumped from the written .mpr:
+
+| MDL constraint | Written XPath | Build |
+| --- | --- | --- |
+| `where DueDate < [%CurrentDateTime%]` | `[DueDate < '[%CurrentDateTime%]']` | ✅ |
+| `where Issue_Assignee = [%CurrentUser%]` | `[… = '[%CurrentUser%]']` | ✅ |
+| `where DueDate < [%CurrentDateTime%] and Status != …` | `[DueDate < [%CurrentDateTime%] and Status != 'Closed']` | ❌ CE0161 |
+| `where Issue_Assignee = [%CurrentUser%] and Status != …` | `[… = [%CurrentUser%] and Status != 'Closed']` | ❌ CE0161 |
+
+Note the enum is converted correctly (`Status != 'Closed'`) in both cases — only
+the token quoting breaks.
+
+**Workaround used:** write the quotes yourself in the MDL. `where DueDate <
+'[%CurrentDateTime%]' and …` passes them through verbatim and builds. Both
+dashboard datasources do this, with a comment saying why.
+
+**Also found here:** a negative numeric literal inside an XPath constraint is
+**truncated**. `addDays([%CurrentDateTime%], -7)` was written as
+`addDays('[%CurrentDateTime%]', -)` — the `7` silently vanished. And a microflow
+*variable* is written unquoted (`ResolvedOn > $ResolvedSince`), which is also
+CE0161. Both were avoided by choosing a metric that needs neither.
+
+**How these were pinned down:** `mx check` names only one erroring activity per
+document, and its text does not say which retrieve. `mx check -j <file>` emits
+JSON with `document-name` per error, which narrowed it to the two datasource
+microflows; then eight one-constraint probe microflows plus `mxcli bson dump`
+gave the exact written XPath. Worth knowing — the JSON mode is much more useful
+than the console output.
+
+## 19. Page widgets cannot bind an attribute through an association into System
+
+`Issue_Assignee/Name` (Issue → System.User) is accepted by `mxcli check` and then
+fails the build:
+
+```
+[error] [CE1613] "The selected attribute 'IssueTracker.Issue.Issue_Assignee/Name'
+no longer exists." at Columns (7/12) of data grid 2 'dgIssues'
+```
+
+Same-module paths are fine — `Issue_Project/Code` and
+`$currentObject/IssueTracker.Comment_Issue` both build. Neither alternative path
+form even parses: `IssueTracker.Issue_Assignee/Name` (module-qualified) and
+`Issue_Assignee/System.User/Name` (via target) are both rejected by the grammar.
+
+**Workaround used:** denormalised `Issue.AssigneeName`, `Issue.ReporterName` and
+`Comment.AuthorName` string attributes, populated by `SUB_CurrentUserName` (which
+resolves the user with the documented `where id = '[%CurrentUser%]'` lookup). The
+associations remain for logic and XPath, where they work fine.
+
+**Two neighbouring quirks in the same area:**
+
+* **Comboboxes want the opposite convention.** `Association: Issue_Assignee`
+  resolves to the wrong module (`System.Issue_Assignee` → CE1613); the
+  **module-qualified** `Association: IssueTracker.Issue_Assignee` builds. So
+  column attribute paths must be bare and combobox associations must be
+  qualified — inverted rules for the same association.
+* **Auto system members are lowercase in page bindings.** An attribute declared
+  `CreatedDate: autocreateddate` is bound in a page as `createdDate` /
+  `changedDate`. Binding `CreatedDate` fails CE1613. Microflows, by contrast, use
+  the declared `CreatedDate` and work.
+
+## 20. Entity access rules cannot be completed in MDL for most real entities (CE0066)
+
+Mendix requires every member of an entity to appear in each access rule. mxcli's
+`GRANT` validator does not recognise two kinds of member that Mendix counts:
+
+```
+Error: entity IssueTracker.Issue has no member(s) changedDate, createdDate;
+       grant only names members of the entity or of an entity it inherits from
+Error: entity IssueTracker.Label has no member(s) Issue_Label; …
+```
+
+* the system members from `autocreateddate` / `autochangeddate` — this rules out
+  `Issue`, `Comment` and `Project`
+* the **non-owning side of an `owner both` reference set** — `Issue_Label` is a
+  member of `Label` as far as Mendix is concerned, but not as far as GRANT is
+
+`read *` does not cover them either: it is expanded to an explicit member list at
+grant time, and the system members are simply absent from it. A *partial* rule is
+worse than none — it fails the build:
+
+```
+[error] [CE0066] "Entity access is out of date. Please update security by clicking
+the 'Update security' button in the domain model editor."
+  at Domain model of module 'IssueTracker'
+```
+
+Granting nothing builds cleanly, so entity rules are declared for
+`DashboardStats` only (no auto members, no associations). Module roles, **page**
+access and **microflow** access are unaffected and fully modelled — 36 grants.
+
+**Suggested fix:** teach the GRANT validator about system members and both-owner
+reference sets; ideally let `read *` / `write *` mean "all members including
+system ones" so a rule stays complete when the domain model changes.
+
+## 21. Reserved words: what actually bites, and what does not
+
+Verified in this build (`nightly-20260805`):
+
+| Where | Reserved | Symptom / fix |
+| --- | --- | --- |
+| Enumeration **value** | `New` | Caught at check time as MDL010. Renamed to `Reported 'New'` — the *caption* can still read "New" |
+| GRANT **member list** | `Title`, `Description`, `Body` | Hard parse error: `mismatched input 'Title' expecting {IDENTIFIER, QUOTED_IDENTIFIER}`. Fix by quoting: `write ("Title", "Description", …)` |
+
+The grant-member case is the surprising one — these are ordinary attribute names,
+and nothing warns you that a member list is parsed where they are keywords.
+
+**Correction to a widely-repeated claim.** `create-page.md` warns that
+`column Status (attribute: Status)` "fails silently" and that the attribute value
+must be quoted. That is **only about the reserved word used as the column
+*widget name*** — the attribute *value* is fine unquoted. Probed directly:
+
+```mdl
+column cUnquotedTitle  (attribute: Title,  caption: 'unquoted Title')
+column cUnquotedStatus (attribute: Status, caption: 'unquoted Status')
+```
+
+round-trips as `column "Title" (Attribute: Title, …)` / `column "Status"
+(Attribute: Status, …)` — stored correctly, and the page builds and renders. So
+the rule is: **use a `col`-prefixed widget name** (which is good practice anyway)
+and the attribute value needs no quoting. This project quotes them regardless,
+which is harmless.
+
+I initially misdiagnosed an empty Title column as this reserved-word problem and
+"fixed" it by quoting. The real cause was finding 23.
+
+## 22. `Size` on a datagrid column is a relative weight, not a pixel width
+
+The page skill documents `ColumnWidth: manual` + `Size: <integer (px)>`. It does
+not behave like pixels. With five columns configured
+`Size: 60 / (autofill) / 100 / 110 / 80` in a 734px-wide grid, the rendered
+header widths were:
+
+| Column | Configured | Rendered |
+| --- | --- | --- |
+| `#` | `manual, Size: 60` | **113px** |
+| `Title` | autofill (no Size) | **20px** — collapsed |
+| `Priority` | `manual, Size: 100` | **189px** |
+| `Due` | `manual, Size: 110` | **207px** |
+| actions | `manual, Size: 80` | **151px** |
+
+The manual widths came out at ~1.88× their configured value — i.e. `Size` was
+distributed as a **weight** across the available width — and the one autofill
+column was squeezed to nothing. The visible symptom was a data grid with no
+Title column at all, which is what sent me chasing reserved words (finding 22).
+
+**Workaround used:** treat `Size` as a weight and give the wrapping text columns a
+dominant one — `caption: 'Title', WrapText: true, ColumnWidth: manual, Size: 320`
+— rather than leaving any column on autofill next to manual siblings.
+
+**Measured with** `getBoundingClientRect().width` on each `[role="columnheader"]`
+in a headless Chromium against the running app. This is not visible from `mx
+check` or `describe page`; the model was correct all along.
+
+**Also here:** `caption: ''` on a column does not render an empty header — it
+falls back to the **widget name**, so the action columns showed `COLMINEACT` /
+`COLESCACT` as headers. Use `caption: ' '` (a single space).
+
+## 24. With security off, `[%CurrentUser%]` is a throwaway anonymous account
+
+Not an mxcli bug, but it bit the demo data and would bite anyone building this way.
+
+The project's security level is left as generated, so every visit is served as a
+**fresh anonymous `System.User`**. Two consequences:
+
+* `SUB_CurrentUserName` returns something like
+  `Anonymous_29f9b7f8-2075-4042-a925-77…`, which is what the assignee column
+  showed until the seed was changed to write real display names.
+* Anonymous accounts are **session-scoped**. When the session that seeded the
+  data goes away, the rows it wrote survive but every `Issue_Assignee` reference
+  pointing at that account is **nulled**. Verified in Postgres: after a restart,
+  `issuetracker$issue_assignee` was NULL on all 12 rows and the dashboard's
+  Unassigned KPI jumped from 6 to 11 while "My queue" went empty.
+
+**Handled in `ACT_DemoData_Seed`:** when data already exists it no longer just
+returns — it re-points any issue that has an `AssigneeName` but a null
+`Issue_Assignee` at whoever is looking now. Verified: `named_but_unlinked = 0`
+after a restart, and the KPI is back to 6.
+
+**Also worth knowing:** seeding issues does not start workflows. Creating an
+`Issue` row is not the same as putting it under workflow control —
+`ACT_Issue_StartWorkflow` has to be called explicitly, which is why the seed now
+starts instances for the three freshly-reported issues. Before that, the workflow
+monitor and every task page were empty even though the workflow was correctly
+modelled, which reads like a broken workflow when it is just missing data.
+
+## 23. Things that worked first try (worth knowing, to keep the list above in perspective)
+
+Not everything fought back. These all built with 0 errors on the first attempt:
+
+* the whole domain model — 5 entities, 3 enumerations, 6 associations, indexes,
+  `autonumber default 1`, cascade delete, `owner both` reference set
+* `call workflow M.WF (Context = $Issue)` **inside a microflow** — this is how a
+  workflow gets started, and it is not in the `mxcli syntax microflow` topic list
+  at all (only under `workflow.call-workflow`, described as a sub-workflow call).
+  Found by probing; builds cleanly.
+* `set task outcome $Task 'Accept'` for completing a user task from a page button
+* user tasks with named outcome branches, `boundary event` aside
+* `create or modify page` genuinely preserving IDs — the stub-then-fill pattern
+  for circular page ↔ microflow references worked exactly as documented
+* `alter entity … add event handler on before commit … raise error` — binding
+  validation without touching Studio Pro
+* `validation feedback $Obj/Attr message '…'`
+* MDL lint catching real bugs *before* the build: MDL047 (`= empty` on an
+  association), MDL044 (`count()` in an expression), MDL010 (reserved enum value),
+  MPR010 (dataview not in a layoutgrid). This is the best part of the toolchain.
+
 ---
 
 ## Verification summary
@@ -385,5 +751,32 @@ hook warms them all.
 | Runtime log | `grep -icE "error|warn|exception" .mxcli/runtime.log` | ⚠️ 8 lines — all benign or self-inflicted (findings 7a, 7b) |
 | Build stability | `git status --porcelain` after 2 builds | ✅ clean — but the *first* build rewrote 51 scaffolded files (finding 11) |
 | Ignore rules under `App/` | `git check-ignore` on 6 generated artifacts | ✅ all ignored after de-anchoring `.gitignore` (finding 12a) |
+
+---
+
+## Issue Tracker build — what shipped
+
+| Layer | Contents |
+| --- | --- |
+| Domain model | `Issue`, `Comment`, `Project`, `Label` (persistent) + `DashboardStats` (non-persistent); 3 enumerations; 7 associations incl. a cascade delete and an `owner both` reference set; 2 indexes |
+| Logic | 21 microflows — 2 datasources, 6 task-outcome handlers, 4 workflow-step helpers, 5 lifecycle actions, 1 before-commit validation, 1 demo seed, 2 helpers |
+| Workflow | `WF_IssueHandling` over `Issue`: Triage → Work → Verify, branching outcomes, loops via handler-driven restart |
+| Pages | 12 — dashboard, issue board, issue detail, issue form, comment pop-up, 3 workflow task pages, workflow monitor, project + label admin |
+| Security | 2 module roles mapped to the app's user roles, 36 grants (pages + microflows + DashboardStats) |
+| Theme | `theme/web/_issuetracker.scss` — KPI tiles, dense grid tuning, status/priority cell tints, light + dark tokens; `--brand-primary` retuned |
+| Reproducibility | 8 numbered scripts in `mdl/`, replayable in order |
+
+**End-to-end verification** (headless Chromium against the running app):
+
+| Check | Result |
+| --- | --- |
+| `mx check` | ✅ **0 errors** |
+| App boots | ✅ HTTP 200 at `localhost:8080` |
+| Dashboard renders | ✅ 8 KPI tiles, 3 grids, 0 JS console errors |
+| KPI arithmetic | ✅ Open 11, Critical 2, Overdue 3, In progress 2, Unassigned 5, Awaiting verification 1, Closed 1, Reopened 1 — each cross-checked against SQL |
+| Demo seed | ✅ 3 projects, 6 labels, 12 issues, 4 comments |
+| Workflow instances | ✅ 3 started, each on an open `Triage the issue` task (verified in `system$workflowusertask`) |
+| Issue detail | ✅ description, resolution, activity feed, fact list, labels all bound |
+| Assignee re-pointing | ✅ `named_but_unlinked = 0` after restart (finding 24) |
 
 Committed and pushed to `claude/mendix-app-mxcli-setup-b0o6qv`.

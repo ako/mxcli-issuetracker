@@ -1,0 +1,273 @@
+// =============================================================================
+// Issue Tracker — the `it-` utility layer
+//
+// Atlas does the heavy lifting (card, flex-*, align-*, background-*,
+// datagrid-*). This file only adds what Atlas has no vocabulary for: the KPI
+// tile, the dense-grid tuning, the status/priority cell tints, and the
+// small-caps eyebrow/label type used to raise information density.
+//
+// Everything reads Atlas's own brand tokens (--brand-primary and friends), so a
+// brand re-tune in custom-variables.scss flows through here automatically.
+// =============================================================================
+
+:root {
+  // Neutral ramp, derived so light/dark both work without a second palette.
+  --it-surface:        #ffffff;
+  --it-surface-sunken: #f5f6f8;
+  --it-border:         #e3e5ea;
+  --it-border-strong:  #cfd3db;
+  --it-ink:            #1c2024;
+  --it-ink-muted:      #5b6470;
+  --it-ink-faint:      #8a929e;
+
+  // Semantic tints for status and priority. Deliberately low-chroma
+  // backgrounds with high-contrast text, so a dense grid does not turn into a
+  // pile of loud chips.
+  --it-critical-bg: #fdecec;  --it-critical-ink: #a3161b;
+  --it-high-bg:     #fff3e6;  --it-high-ink:     #98500b;
+  --it-warn-bg:     #fff8e1;  --it-warn-ink:     #8a6100;
+  --it-ok-bg:       #e9f7ef;  --it-ok-ink:       #1d6b3f;
+  --it-info-bg:     #eaf1fe;  --it-info-ink:     #1b4bb8;
+  --it-neutral-bg:  #f1f3f6;  --it-neutral-ink:  #4a525e;
+
+  --it-radius: 10px;
+  --it-gap:    16px;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --it-surface:        #191c20;
+    --it-surface-sunken: #12151a;
+    --it-border:         #2b3037;
+    --it-border-strong:  #3a4048;
+    --it-ink:            #e8eaed;
+    --it-ink-muted:      #a3abb6;
+    --it-ink-faint:      #78808b;
+
+    --it-critical-bg: #3a1a1c;  --it-critical-ink: #ff9ea1;
+    --it-high-bg:     #3a2717;  --it-high-ink:     #ffbe7d;
+    --it-warn-bg:     #332a10;  --it-warn-ink:     #f0cf72;
+    --it-ok-bg:       #16301f;  --it-ok-ink:       #86dba6;
+    --it-info-bg:     #1a2540;  --it-info-ink:     #9dbcff;
+    --it-neutral-bg:  #23272d;  --it-neutral-ink:  #b4bcc7;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Page shell
+// ---------------------------------------------------------------------------
+
+.it-page {
+  padding: 20px 24px 32px;
+  background: var(--it-surface-sunken);
+  min-height: 100%;
+
+  // Tighten Atlas's default vertical rhythm — density is the whole point.
+  .mx-layoutgrid,
+  .mx-layoutgrid-fluid { padding-left: 0; padding-right: 0; }
+  .row { margin-left: -8px; margin-right: -8px; }
+  [class^="col-"], [class*=" col-"] { padding-left: 8px; padding-right: 8px; }
+}
+
+.it-toolbar   { margin-bottom: var(--it-gap); gap: 12px; }
+.it-actionbar { margin-top: var(--it-gap); gap: 8px; }
+
+// Eyebrow: small-caps context line above a heading. Block so it never runs
+// into the heading next to it.
+.it-eyebrow,
+.it-eyebrow-wrap {
+  display: block;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--it-ink-faint);
+  margin-bottom: 2px;
+}
+
+.it-muted,
+.it-muted-wrap {
+  display: block;
+  color: var(--it-ink-muted);
+  font-size: 13px;
+}
+
+.it-section-label {
+  display: block;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--it-ink-muted);
+}
+
+// ---------------------------------------------------------------------------
+// Cards
+// ---------------------------------------------------------------------------
+
+.it-card {
+  border: 1px solid var(--it-border);
+  border-radius: var(--it-radius);
+  background: var(--it-surface);
+  padding: 14px 16px;
+  margin-bottom: var(--it-gap);
+  box-shadow: 0 1px 2px rgba(16, 24, 40, 0.04);
+}
+
+// A card whose only child is a grid: let the grid meet the card edges.
+.it-card--flush {
+  padding: 0;
+  overflow: hidden;
+
+  .it-card-head {
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--it-border);
+    background: var(--it-surface);
+  }
+}
+
+.it-card-head { gap: 8px; }
+
+// ---------------------------------------------------------------------------
+// KPI tiles
+// ---------------------------------------------------------------------------
+
+.it-kpi {
+  border: 1px solid var(--it-border);
+  border-left: 3px solid var(--it-border-strong);
+  border-radius: var(--it-radius);
+  background: var(--it-surface);
+  padding: 12px 14px 10px;
+  margin-bottom: var(--it-gap);
+  min-height: 82px;
+  box-shadow: 0 1px 2px rgba(16, 24, 40, 0.04);
+}
+
+.it-kpi-label {
+  display: block;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--it-ink-muted);
+  margin-bottom: 2px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+// The number carries the tile. Tabular figures so columns of digits line up.
+.it-kpi-value,
+h1.it-kpi-value {
+  display: block;
+  margin: 0;
+  font-size: 30px;
+  line-height: 1.1;
+  font-weight: 700;
+  color: var(--it-ink);
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum" 1;
+}
+
+.it-kpi--critical { border-left-color: var(--it-critical-ink); .it-kpi-value { color: var(--it-critical-ink); } }
+.it-kpi--warn     { border-left-color: var(--it-warn-ink);     .it-kpi-value { color: var(--it-warn-ink); } }
+.it-kpi--ok       { border-left-color: var(--it-ok-ink);       .it-kpi-value { color: var(--it-ok-ink); } }
+.it-kpi--info     { border-left-color: var(--it-info-ink);     .it-kpi-value { color: var(--it-info-ink); } }
+
+// ---------------------------------------------------------------------------
+// Dense data grids
+// ---------------------------------------------------------------------------
+
+.it-grid {
+  font-size: 13px;
+
+  // DataGrid2 rows default to a generous height; clamp them so a dense board
+  // shows many issues per screen. Wrapping title cells stay readable but cannot
+  // stretch a row past three lines.
+  [role="row"] { min-height: 0; }
+
+  .td,
+  .th { line-height: 1.35; }
+
+  .td { max-height: 3.9em; overflow: hidden; }
+
+  .th,
+  .thead .th {
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--it-ink-muted);
+    background: var(--it-surface-sunken);
+    padding: 8px 10px;
+  }
+
+  .td {
+    padding: 7px 10px;
+    vertical-align: middle;
+    color: var(--it-ink);
+  }
+
+  // Numeric columns: tabular figures keep #/counts aligned.
+  .td[style*="right"],
+  .align-column-right .td { font-variant-numeric: tabular-nums; }
+
+  .mx-datagrid2-paging,
+  .paging-status { font-size: 12px; color: var(--it-ink-muted); }
+}
+
+// Status / priority cell tints, applied via DynamicCellClass on the column.
+// Scoped to .td so the tint fills the cell rather than wrapping the text.
+.it-grid .td {
+  &.it-cell-critical { background: var(--it-critical-bg); color: var(--it-critical-ink); font-weight: 600; }
+  &.it-cell-high     { background: var(--it-high-bg);     color: var(--it-high-ink);     font-weight: 600; }
+  &.it-cell-normal   { color: var(--it-ink-muted); }
+  &.it-cell-blocked  { background: var(--it-warn-bg);     color: var(--it-warn-ink);     font-weight: 600; }
+  &.it-cell-open     { background: var(--it-info-bg);     color: var(--it-info-ink);     font-weight: 600; }
+  &.it-cell-done     { background: var(--it-ok-bg);       color: var(--it-ok-ink); }
+  &.it-cell-overdue  { background: var(--it-critical-bg); color: var(--it-critical-ink); font-weight: 600; }
+}
+
+// ---------------------------------------------------------------------------
+// Detail pane fact list — label/value rows at high density
+// ---------------------------------------------------------------------------
+
+.it-facts {
+  gap: 0;
+
+  .mx-text,
+  .mx-dynamictext {
+    display: block;
+    padding: 6px 0;
+    border-bottom: 1px solid var(--it-border);
+    font-size: 13px;
+    color: var(--it-ink);
+    white-space: pre-wrap;
+  }
+
+  .mx-text:last-child,
+  .mx-dynamictext:last-child { border-bottom: 0; }
+}
+
+// ---------------------------------------------------------------------------
+// Buttons — slightly tighter than Atlas default so toolbars stay compact
+// ---------------------------------------------------------------------------
+
+.it-toolbar .btn,
+.it-actionbar .btn,
+.it-grid .btn {
+  font-size: 13px;
+  padding: 6px 12px;
+  border-radius: 8px;
+}
+
+.it-grid .btn { padding: 3px 10px; font-size: 12px; }
+
+// ---------------------------------------------------------------------------
+// Atlas layout fix
+// ---------------------------------------------------------------------------
+
+// Atlas_Default's sidebar starts collapsed at 48px but its navigation tree keeps
+// `overflow: visible`, so the menu labels spill across the page content. Clip
+// them; the hamburger toggle still expands the sidebar to full width.
+.region-sidebar .mx-navigationtree { overflow: hidden; }

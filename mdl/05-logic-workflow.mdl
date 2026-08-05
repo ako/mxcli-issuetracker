@@ -1,0 +1,444 @@
+-- =============================================================================
+-- Issue Tracker — Phase 5: workflow-coupled logic
+--
+-- Everything here references the WF_IssueHandling document (directly, or through
+-- ACT_Issue_StartWorkflow), so it must run after phase 4 has created it.
+--
+-- The NeedsInfo and Reopen handlers implement the workflow's loops: they clear
+-- the issue's workflow link and start a fresh instance, because mxcli cannot
+-- write a working `jump to` activity (FINDINGS finding 16).
+-- =============================================================================
+
+
+/**
+ * Starts the handling workflow for an issue and links the instance back onto
+ * the issue so task pages can find it again.
+ *
+ * Idempotent: an issue that already has a workflow is left alone.
+ *
+ * @param $Issue The issue to put under workflow control
+ * @returns true if a workflow was started, false if one already existed
+ */
+create or replace microflow IssueTracker.ACT_Issue_StartWorkflow ($Issue: IssueTracker.Issue)
+returns boolean as $started
+folder 'Workflow'
+begin
+  if $Issue/IssueTracker.Issue_Workflow != empty then
+    log info node 'IssueTracker' 'Workflow already running for issue';
+    return false;
+  end if;
+
+  $Wf = call workflow IssueTracker.WF_IssueHandling (Context = $Issue);
+  change $Issue (IssueTracker.Issue_Workflow = $Wf) commit refresh;
+  log info node 'IssueTracker' 'Started handling workflow for issue ' + toString($Issue/Number);
+  return true;
+end;
+/
+
+/**
+ * Saves the edit form: commits the issue, then puts it under workflow control
+ * the first time it is saved.
+ *
+ * @param $Issue The issue being saved
+ * @returns true when saved
+ */
+create or replace microflow IssueTracker.ACT_Issue_Save ($Issue: IssueTracker.Issue)
+returns boolean as $ok
+folder 'Issue'
+begin
+  commit $Issue with events refresh;
+  $started = call microflow IssueTracker.ACT_Issue_StartWorkflow (Issue = $Issue);
+  close page;
+  return true;
+end;
+/
+
+
+-- -----------------------------------------------------------------------------
+-- Task outcome handlers — called from task page buttons
+-- -----------------------------------------------------------------------------
+
+/**
+ * Triage outcome: accept the issue into the backlog.
+ *
+ * @param $Task The triage user task
+ * @returns true
+ */
+create or replace microflow IssueTracker.ACT_Task_TriageAccept ($Task: System.WorkflowUserTask)
+returns boolean as $ok
+folder 'Workflow'
+begin
+  $Issue = call microflow IssueTracker.SUB_Issue_FromTask (Task = $Task);
+  if $Issue != empty then
+    change $Issue (Status = IssueTracker.IssueStatus.Triaged) commit;
+  end if;
+  set task outcome $Task 'Accept';
+  close page;
+  return true;
+end;
+/
+
+/**
+ * Triage outcome: reject the issue as invalid or out of scope.
+ *
+ * @param $Task The triage user task
+ * @returns true
+ */
+create or replace microflow IssueTracker.ACT_Task_TriageReject ($Task: System.WorkflowUserTask)
+returns boolean as $ok
+folder 'Workflow'
+begin
+  $Issue = call microflow IssueTracker.SUB_Issue_FromTask (Task = $Task);
+  if $Issue != empty then
+    change $Issue (
+      Status = IssueTracker.IssueStatus.Rejected,
+      ResolvedOn = [%CurrentDateTime%]) commit;
+  end if;
+  set task outcome $Task 'Reject';
+  close page;
+  return true;
+end;
+/
+
+/**
+ * Work outcome: the fix is in, hand the issue to verification.
+ *
+ * @param $Task The resolve user task
+ * @returns true
+ */
+create or replace microflow IssueTracker.ACT_Task_WorkResolve ($Task: System.WorkflowUserTask)
+returns boolean as $ok
+folder 'Workflow'
+begin
+  $Issue = call microflow IssueTracker.SUB_Issue_FromTask (Task = $Task);
+  if $Issue != empty then
+    change $Issue (
+      Status = IssueTracker.IssueStatus.Resolved,
+      ResolvedOn = [%CurrentDateTime%]) commit;
+  end if;
+  set task outcome $Task 'Resolved';
+  close page;
+  return true;
+end;
+/
+
+/**
+ * Work outcome: blocked pending more information, send it back to triage.
+ *
+ * @param $Task The resolve user task
+ * @returns true
+ */
+create or replace microflow IssueTracker.ACT_Task_WorkBlock ($Task: System.WorkflowUserTask)
+returns boolean as $ok
+folder 'Workflow'
+begin
+  $Issue = call microflow IssueTracker.SUB_Issue_FromTask (Task = $Task);
+  set task outcome $Task 'NeedsInfo';
+  if $Issue != empty then
+    change $Issue (
+      Status = IssueTracker.IssueStatus.Blocked,
+      IssueTracker.Issue_Workflow = empty) commit;
+    $restarted = call microflow IssueTracker.ACT_Issue_StartWorkflow (Issue = $Issue);
+  end if;
+  close page;
+  return true;
+end;
+/
+
+/**
+ * Verification outcome: accept the fix and close the issue.
+ *
+ * @param $Task The verify user task
+ * @returns true
+ */
+create or replace microflow IssueTracker.ACT_Task_VerifyClose ($Task: System.WorkflowUserTask)
+returns boolean as $ok
+folder 'Workflow'
+begin
+  $Issue = call microflow IssueTracker.SUB_Issue_FromTask (Task = $Task);
+  if $Issue != empty then
+    change $Issue (Status = IssueTracker.IssueStatus.Verified) commit;
+  end if;
+  set task outcome $Task 'Close';
+  close page;
+  return true;
+end;
+/
+
+/**
+ * Verification outcome: the fix did not hold. Bump the reopen counter and send
+ * the issue back to be worked again.
+ *
+ * @param $Task The verify user task
+ * @returns true
+ */
+create or replace microflow IssueTracker.ACT_Task_VerifyReopen ($Task: System.WorkflowUserTask)
+returns boolean as $ok
+folder 'Workflow'
+begin
+  $Issue = call microflow IssueTracker.SUB_Issue_FromTask (Task = $Task);
+  set task outcome $Task 'Reopen';
+  if $Issue != empty then
+    change $Issue (
+      Status = IssueTracker.IssueStatus.InProgress,
+      ReopenCount = $Issue/ReopenCount + 1,
+      ResolvedOn = empty,
+      IssueTracker.Issue_Workflow = empty) commit;
+    $restarted = call microflow IssueTracker.ACT_Issue_StartWorkflow (Issue = $Issue);
+  end if;
+  close page;
+  return true;
+end;
+/
+
+
+-- -----------------------------------------------------------------------------
+-- Demo data
+-- -----------------------------------------------------------------------------
+
+/**
+ * Seeds projects, labels and a spread of issues so the dashboard and grids show
+ * real distributions instead of empty states.
+ *
+ * Safe to call repeatedly — it returns early if projects already exist.
+ *
+ * @returns Number of issues created
+ */
+create or replace microflow IssueTracker.ACT_DemoData_Seed ()
+returns integer as $created
+folder 'Demo'
+begin
+  retrieve $Existing from IssueTracker.Project;
+  $ExistingCount = count($Existing);
+  if $ExistingCount > 0 then
+    -- Demo data is already there, so do not seed again. But with security off
+    -- every visit is a fresh anonymous System.User, and those accounts are
+    -- session-scoped: the assignee references written by an earlier session are
+    -- gone by now, which would leave "My queue" empty. Re-point the issues that
+    -- were originally assigned (they still carry AssigneeName) at whoever is
+    -- looking now, so the demo stays meaningful across restarts.
+    retrieve $Orphans from IssueTracker.Issue
+      where AssigneeName != empty
+        and not(IssueTracker.Issue_Assignee/System.User);
+    loop $Orphan in $Orphans
+    begin
+      change $Orphan (IssueTracker.Issue_Assignee = [%CurrentUser%]) commit;
+    end loop;
+    $ReclaimedCount = count($Orphans);
+    log info node 'IssueTracker' 'Demo data present; re-pointed ' + toString($ReclaimedCount) + ' assignee reference(s) at the current user';
+    return 0;
+  end if;
+
+  $Platform = create IssueTracker.Project (Code = 'PLAT', Name = 'Platform Core', Description = 'Runtime, build pipeline and shared services.') commit;
+  $Portal = create IssueTracker.Project (Code = 'PORT', Name = 'Customer Portal', Description = 'Public-facing self-service portal.') commit;
+  $Mobile = create IssueTracker.Project (Code = 'MOB', Name = 'Mobile App', Description = 'iOS and Android client.') commit;
+
+  $LblRegression = create IssueTracker.Label (Name = 'regression', ColorClass = 'background-danger') commit;
+  $LblSecurity = create IssueTracker.Label (Name = 'security', ColorClass = 'background-danger') commit;
+  $LblUX = create IssueTracker.Label (Name = 'ux', ColorClass = 'background-primary') commit;
+  $LblPerf = create IssueTracker.Label (Name = 'performance', ColorClass = 'background-warning') commit;
+  $LblDocs = create IssueTracker.Label (Name = 'docs', ColorClass = 'background-secondary') commit;
+  $LblGoodFirst = create IssueTracker.Label (Name = 'good-first-issue', ColorClass = 'background-success') commit;
+
+  $who = call microflow IssueTracker.SUB_CurrentUserName ();
+  declare $nameA string = 'Alex Rivera';
+  declare $nameB string = 'Priya Raman';
+  declare $nameC string = 'Sam Okafor';
+
+  $I1 = create IssueTracker.Issue (
+    Title = 'Login fails with SSO when email contains a plus sign',
+    Description = 'Users with addresses like name+tag@example.com are rejected at the identity provider callback. Affects roughly 40 accounts.',
+    Status = IssueTracker.IssueStatus.InProgress,
+    Priority = IssueTracker.IssuePriority.Critical,
+    Kind = IssueTracker.IssueKind.Bug,
+    DueDate = addDays([%CurrentDateTime%], -2),
+    IsEscalated = true,
+    IssueTracker.Issue_Project = $Portal,
+    ReporterName = $nameB,
+    AssigneeName = $nameB,
+    IssueTracker.Issue_Reporter = [%CurrentUser%],
+    IssueTracker.Issue_Assignee = [%CurrentUser%],
+    IssueTracker.Issue_Label = $LblSecurity) commit;
+
+  $I2 = create IssueTracker.Issue (
+    Title = 'Dashboard query takes 8s on tenants with >50k issues',
+    Description = 'The KPI tiles issue one count query per metric. Needs a single aggregate query or a view entity.',
+    Status = IssueTracker.IssueStatus.Triaged,
+    Priority = IssueTracker.IssuePriority.High,
+    Kind = IssueTracker.IssueKind.Bug,
+    DueDate = addDays([%CurrentDateTime%], 3),
+    IssueTracker.Issue_Project = $Platform,
+    ReporterName = $nameC,
+    AssigneeName = $nameC,
+    IssueTracker.Issue_Reporter = [%CurrentUser%],
+    IssueTracker.Issue_Assignee = [%CurrentUser%],
+    IssueTracker.Issue_Label = $LblPerf) commit;
+
+  $I3 = create IssueTracker.Issue (
+    Title = 'Add keyboard shortcuts to the issue board',
+    Description = 'j/k to move between rows, e to edit, c to comment.',
+    Status = IssueTracker.IssueStatus.Reported,
+    Priority = IssueTracker.IssuePriority.Low,
+    Kind = IssueTracker.IssueKind.Feature,
+    DueDate = addDays([%CurrentDateTime%], 21),
+    IssueTracker.Issue_Project = $Portal,
+    ReporterName = $nameA,
+    IssueTracker.Issue_Reporter = [%CurrentUser%],
+    IssueTracker.Issue_Label = $LblUX) commit;
+
+  $I4 = create IssueTracker.Issue (
+    Title = 'Attachment upload silently drops files over 10 MB',
+    Description = 'No error is shown; the request is truncated by the reverse proxy.',
+    Status = IssueTracker.IssueStatus.Resolved,
+    Priority = IssueTracker.IssuePriority.High,
+    Kind = IssueTracker.IssueKind.Bug,
+    ResolvedOn = addDays([%CurrentDateTime%], -1),
+    ResolutionNotes = 'Raised the proxy body limit to 64 MB and added a client-side size check.',
+    DueDate = addDays([%CurrentDateTime%], 1),
+    IssueTracker.Issue_Project = $Platform,
+    ReporterName = $nameB,
+    AssigneeName = $nameB,
+    IssueTracker.Issue_Reporter = [%CurrentUser%],
+    IssueTracker.Issue_Assignee = [%CurrentUser%],
+    IssueTracker.Issue_Label = $LblRegression) commit;
+
+  $I5 = create IssueTracker.Issue (
+    Title = 'Offline sync loses comments written in airplane mode',
+    Description = 'Comments queued offline are discarded when the token refreshes mid-sync.',
+    Status = IssueTracker.IssueStatus.InProgress,
+    Priority = IssueTracker.IssuePriority.Critical,
+    Kind = IssueTracker.IssueKind.Bug,
+    DueDate = addDays([%CurrentDateTime%], -5),
+    ReopenCount = 2,
+    IsEscalated = true,
+    IssueTracker.Issue_Project = $Mobile,
+    ReporterName = $nameC,
+    AssigneeName = $nameC,
+    IssueTracker.Issue_Reporter = [%CurrentUser%],
+    IssueTracker.Issue_Assignee = [%CurrentUser%],
+    IssueTracker.Issue_Label = $LblRegression) commit;
+
+  $I6 = create IssueTracker.Issue (
+    Title = 'Document the webhook retry policy',
+    Description = 'Support keeps asking. Needs a table of backoff intervals and the dead-letter behaviour.',
+    Status = IssueTracker.IssueStatus.Reported,
+    Priority = IssueTracker.IssuePriority.Low,
+    Kind = IssueTracker.IssueKind.Task,
+    DueDate = addDays([%CurrentDateTime%], 14),
+    IssueTracker.Issue_Project = $Platform,
+    ReporterName = $nameA,
+    IssueTracker.Issue_Reporter = [%CurrentUser%],
+    IssueTracker.Issue_Label = $LblDocs) commit;
+
+  $I7 = create IssueTracker.Issue (
+    Title = 'Dark mode contrast fails WCAG AA on status chips',
+    Description = 'The amber and green chips drop to 2.9:1 against the dark surface.',
+    Status = IssueTracker.IssueStatus.Triaged,
+    Priority = IssueTracker.IssuePriority.Medium,
+    Kind = IssueTracker.IssueKind.Bug,
+    DueDate = addDays([%CurrentDateTime%], 7),
+    IssueTracker.Issue_Project = $Portal,
+    ReporterName = $nameB,
+    IssueTracker.Issue_Reporter = [%CurrentUser%],
+    IssueTracker.Issue_Label = $LblUX) commit;
+
+  $I8 = create IssueTracker.Issue (
+    Title = 'Push notifications duplicated on Android 14',
+    Description = 'Two notifications per event since the FCM SDK upgrade.',
+    Status = IssueTracker.IssueStatus.Closed,
+    Priority = IssueTracker.IssuePriority.Medium,
+    Kind = IssueTracker.IssueKind.Bug,
+    ResolvedOn = addDays([%CurrentDateTime%], -9),
+    ResolutionNotes = 'Removed the legacy notification channel registered by the old SDK.',
+    ReporterName = $nameC,
+    AssigneeName = $nameC,
+    IssueTracker.Issue_Project = $Mobile,
+    IssueTracker.Issue_Reporter = [%CurrentUser%],
+    IssueTracker.Issue_Assignee = [%CurrentUser%]) commit;
+
+  $I9 = create IssueTracker.Issue (
+    Title = 'Bulk CSV import rejects valid ISO-8601 dates',
+    Description = 'Dates with a timezone offset are parsed as invalid.',
+    Status = IssueTracker.IssueStatus.Blocked,
+    Priority = IssueTracker.IssuePriority.High,
+    Kind = IssueTracker.IssueKind.Bug,
+    DueDate = addDays([%CurrentDateTime%], -1),
+    IssueTracker.Issue_Project = $Platform,
+    ReporterName = $nameC,
+    IssueTracker.Issue_Reporter = [%CurrentUser%],
+    IssueTracker.Issue_Label = $LblRegression) commit;
+
+  $I10 = create IssueTracker.Issue (
+    Title = 'Can labels be renamed without losing history?',
+    Description = 'Asked by the support team. Behaviour is currently undefined.',
+    Status = IssueTracker.IssueStatus.Reported,
+    Priority = IssueTracker.IssuePriority.Low,
+    Kind = IssueTracker.IssueKind.Question,
+    IssueTracker.Issue_Project = $Portal,
+    ReporterName = $nameA,
+    IssueTracker.Issue_Reporter = [%CurrentUser%],
+    IssueTracker.Issue_Label = $LblGoodFirst) commit;
+
+  $I11 = create IssueTracker.Issue (
+    Title = 'Session timeout warning appears twice',
+    Description = 'Two modals stack when the tab regains focus after a long idle.',
+    Status = IssueTracker.IssueStatus.Verified,
+    Priority = IssueTracker.IssuePriority.Low,
+    Kind = IssueTracker.IssueKind.Bug,
+    ResolvedOn = addDays([%CurrentDateTime%], -3),
+    ResolutionNotes = 'Debounced the visibility-change handler.',
+    IssueTracker.Issue_Project = $Portal,
+    ReporterName = $nameB,
+    AssigneeName = $nameB,
+    IssueTracker.Issue_Reporter = [%CurrentUser%],
+    IssueTracker.Issue_Assignee = [%CurrentUser%],
+    IssueTracker.Issue_Label = $LblUX) commit;
+
+  $I12 = create IssueTracker.Issue (
+    Title = 'Export to Excel omits the assignee column',
+    Description = 'The column is present in the grid but missing from the generated workbook.',
+    Status = IssueTracker.IssueStatus.Triaged,
+    Priority = IssueTracker.IssuePriority.Medium,
+    Kind = IssueTracker.IssueKind.Bug,
+    DueDate = addDays([%CurrentDateTime%], 5),
+    ReporterName = $nameB,
+    AssigneeName = $nameB,
+    IssueTracker.Issue_Project = $Portal,
+    IssueTracker.Issue_Reporter = [%CurrentUser%],
+    IssueTracker.Issue_Assignee = [%CurrentUser%]) commit;
+
+  $C1 = create IssueTracker.Comment (
+    Body = 'Reproduced on staging. The identity provider strips everything after the plus before the callback comparison.',
+    AuthorName = $nameB,
+    IssueTracker.Comment_Issue = $I1,
+    IssueTracker.Comment_Author = [%CurrentUser%]) commit;
+
+  $C2 = create IssueTracker.Comment (
+    Body = 'Escalating — this blocks onboarding for the enterprise pilot.',
+    AuthorName = $nameB,
+    IssueTracker.Comment_Issue = $I1,
+    IssueTracker.Comment_Author = [%CurrentUser%]) commit;
+
+  $C3 = create IssueTracker.Comment (
+    Body = 'Profiler shows 8 sequential count queries. A single grouped aggregate should bring this under 200ms.',
+    AuthorName = $nameB,
+    IssueTracker.Comment_Issue = $I2,
+    IssueTracker.Comment_Author = [%CurrentUser%]) commit;
+
+  $C4 = create IssueTracker.Comment (
+    Body = 'Third occurrence this quarter. Adding a regression test around the token refresh path.',
+    AuthorName = $nameB,
+    IssueTracker.Comment_Issue = $I5,
+    IssueTracker.Comment_Author = [%CurrentUser%]) commit;
+
+  -- Put the three freshly-reported issues under workflow control, so the
+  -- workflow monitor has live instances and the triage task page has real work.
+  -- The rest are seeded mid-lifecycle and deliberately left without an instance.
+  $wf3 = call microflow IssueTracker.ACT_Issue_StartWorkflow (Issue = $I3);
+  $wf6 = call microflow IssueTracker.ACT_Issue_StartWorkflow (Issue = $I6);
+  $wf10 = call microflow IssueTracker.ACT_Issue_StartWorkflow (Issue = $I10);
+
+  log info node 'IssueTracker' 'Seeded demo data: 3 projects, 6 labels, 12 issues, 3 workflow instances';
+  return 12;
+end;
+/

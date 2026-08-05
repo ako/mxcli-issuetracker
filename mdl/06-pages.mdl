@@ -1,0 +1,607 @@
+-- =============================================================================
+-- Issue Tracker — Phase 6: pages
+--
+-- Atlas-first: layout comes from Atlas classes (card, flex-*, align-*,
+-- spacing-*, background-*, datagrid-*) plus a thin `it-` utility layer defined
+-- in theme/web/main.scss for the dense chips and KPI tiles.
+--
+-- Ordering matters: a page referenced by another page must be created first
+-- (MDL resolves references immediately). The five stubs from phase 2 are filled
+-- with CREATE OR MODIFY so their IDs — and the microflow/workflow bindings that
+-- point at them — survive.
+--
+-- Two conventions enforced throughout, both from hard-won build failures:
+--   * `Status` is a reserved word: bind it as `attribute: "Status"` on a
+--     col-prefixed widget name, never `column Status (...)`.
+--   * A container must never be empty and dynamictext content must never be '',
+--     or the page compiles but crashes at runtime.
+-- =============================================================================
+
+-- -----------------------------------------------------------------------------
+-- Issue edit form (fills the phase-2 stub)
+-- -----------------------------------------------------------------------------
+
+create or modify page IssueTracker.Issue_NewEdit
+(
+  params: { $Issue: IssueTracker.Issue },
+  title: 'Issue',
+  layout: Atlas_Core.PopupLayout,
+  folder: 'Issues',
+  PopupWidth: 900,
+  PopupHeight: 720,
+  PopupResizable: true
+)
+{
+  layoutgrid gridIssueOuter { row rowIssueOuter { column colIssueOuter (desktopwidth: autofill) {
+  dataview dvIssue (datasource: $Issue, FormOrientation: Vertical) {
+    layoutgrid gridForm {
+      row rowTitle {
+        column colTitle (desktopwidth: 12) {
+          textbox txtTitle (label: 'Title', attribute: "Title")
+        }
+      }
+      row rowMeta {
+        column colStatusF (desktopwidth: 3, phonewidth: 6) {
+          combobox cmbStatus (label: 'Status', attribute: "Status")
+        }
+        column colPrioF (desktopwidth: 3, phonewidth: 6) {
+          combobox cmbPriority (label: 'Priority', attribute: Priority)
+        }
+        column colKindF (desktopwidth: 3, phonewidth: 6) {
+          combobox cmbKind (label: 'Kind', attribute: Kind)
+        }
+        column colDueF (desktopwidth: 3, phonewidth: 6) {
+          datepicker dpDue (label: 'Due date', attribute: DueDate)
+        }
+      }
+      row rowRefs {
+        column colProjF (desktopwidth: 6, phonewidth: 12) {
+          combobox cmbProject (label: 'Project', Association: IssueTracker.Issue_Project, datasource: database IssueTracker.Project, CaptionAttribute: Name)
+        }
+        column colAssigneeF (desktopwidth: 6, phonewidth: 12) {
+          combobox cmbAssignee (label: 'Assignee', Association: IssueTracker.Issue_Assignee, datasource: database System.User, CaptionAttribute: Name)
+        }
+      }
+      row rowDesc {
+        column colDescF (desktopwidth: 12) {
+          textarea txtDescription (label: 'Description', attribute: "Description")
+        }
+      }
+      row rowRes {
+        column colResF (desktopwidth: 12) {
+          textarea txtResolution (label: 'Resolution notes', attribute: ResolutionNotes)
+        }
+      }
+    }
+
+    footer footerEdit {
+      actionbutton btnSave (caption: 'Save', action: microflow IssueTracker.ACT_Issue_Save(Issue: $Issue), buttonstyle: primary)
+      actionbutton btnCancel (caption: 'Cancel', action: cancel_changes)
+    }
+  }
+  } } }
+}
+/
+
+-- -----------------------------------------------------------------------------
+-- Comment pop-up (fills the phase-2 stub)
+-- -----------------------------------------------------------------------------
+
+create or modify page IssueTracker.Comment_New
+(
+  params: { $Comment: IssueTracker.Comment },
+  title: 'Add comment',
+  layout: Atlas_Core.PopupLayout,
+  folder: 'Issues',
+  PopupWidth: 640,
+  PopupHeight: 380
+)
+{
+  layoutgrid griddvCommentOuter { row rowdvCommentOuter { column coldvCommentOuter (desktopwidth: autofill) {
+  dataview dvComment (datasource: $Comment, FormOrientation: Vertical) {
+    layoutgrid gridComment { row rowComment { column colComment (desktopwidth: autofill) {
+      textarea txtBody (label: 'Comment', attribute: "Body")
+    } } }
+    footer footerComment {
+      actionbutton btnPost (caption: 'Post comment', action: save_changes close_page, buttonstyle: primary)
+      actionbutton btnCancelC (caption: 'Cancel', action: cancel_changes)
+    }
+  }
+  } } }
+}
+/
+
+-- -----------------------------------------------------------------------------
+-- Issue detail
+-- -----------------------------------------------------------------------------
+
+create or replace page IssueTracker.Issue_Detail
+(
+  params: { $Issue: IssueTracker.Issue },
+  title: 'Issue detail',
+  layout: Atlas_Core.Atlas_Default,
+  folder: 'Issues',
+  url: 'issue/{Issue}'
+)
+{
+  container ctnDetailPage (class: 'it-page background-main') {
+    dataview dvDetail (datasource: $Issue, FormOrientation: Vertical) {
+
+      container ctnDetailHead (class: 'it-toolbar flex-row align-x-between align-y-center') {
+        container ctnDetailTitle (class: 'flex-column') {
+          dynamictext txtIssueNo (content: 'Issue #{1}', contentparams: [{1} = Number], class: 'it-eyebrow')
+          dynamictext txtIssueTitle (Attribute: "Title", rendermode: H2)
+        }
+        container ctnDetailActions (class: 'flex-row align-y-center') {
+          actionbutton btnClaim (caption: 'Assign to me', action: microflow IssueTracker.ACT_Issue_ClaimForMe(Issue: $Issue), icon: 'Atlas_Core.Atlas_Filled.user')
+          actionbutton btnEditIssue (caption: 'Edit', action: show_page IssueTracker.Issue_NewEdit(Issue: $Issue), buttonstyle: primary, icon: 'Atlas_Core.Atlas_Filled.pencil')
+          actionbutton btnComment (caption: 'Comment', action: microflow IssueTracker.ACT_Comment_New(Issue: $Issue), icon: 'Atlas_Core.Atlas_Filled.message-bubble-add')
+        }
+      }
+
+      layoutgrid gridDetail {
+        row rowDetailBody {
+
+          column colDetailMain (desktopwidth: 8, tabletwidth: 12, phonewidth: 12) {
+            container ctnDesc (class: 'card it-card') {
+              dynamictext lblDesc (content: 'Description', class: 'it-section-label')
+              dynamictext txtDesc (Attribute: "Description", rendermode: Paragraph)
+            }
+            container ctnRes (class: 'card it-card') {
+              dynamictext lblRes (content: 'Resolution', class: 'it-section-label')
+              dynamictext txtRes (Attribute: ResolutionNotes, rendermode: Paragraph)
+            }
+            container ctnComments (class: 'card it-card') {
+              dynamictext lblComments (content: 'Activity', class: 'it-section-label')
+              datagrid dgComments (
+                datasource: $currentObject/IssueTracker.Comment_Issue,
+                PageSize: 10,
+                class: 'datagrid-lined datagrid-hover it-grid'
+              ) {
+                column colCmtWhen (attribute: createdDate, caption: 'When', ColumnWidth: manual, Size: 150)
+                column colCmtWho (attribute: AuthorName, caption: 'Author', ColumnWidth: manual, Size: 160)
+                column colCmtBody (attribute: "Body", caption: 'Comment', WrapText: true, ColumnWidth: manual, Size: 320)
+              }
+            }
+          }
+
+          column colDetailSide (desktopwidth: 4, tabletwidth: 12, phonewidth: 12) {
+            container ctnFacts (class: 'card it-card') {
+              dynamictext lblFacts (content: 'Details', class: 'it-section-label')
+              container ctnFactRows (class: 'flex-column it-facts') {
+                dynamictext factStatus (content: 'Status  {1}', contentparams: [{1} = "Status"])
+                dynamictext factPriority (content: 'Priority  {1}', contentparams: [{1} = Priority])
+                dynamictext factKind (content: 'Kind  {1}', contentparams: [{1} = Kind])
+                dynamictext factProject (content: 'Project  {1}', contentparams: [{1} = Issue_Project/Name])
+                dynamictext factAssignee (content: 'Assignee  {1}', contentparams: [{1} = AssigneeName])
+                dynamictext factReporter (content: 'Reporter  {1}', contentparams: [{1} = ReporterName])
+                dynamictext factDue (content: 'Due  {1}', contentparams: [{1} = DueDate format (dateFormat: Date)])
+                dynamictext factCreated (content: 'Created  {1}', contentparams: [{1} = createdDate format (dateFormat: DateTime)])
+                dynamictext factChanged (content: 'Updated  {1}', contentparams: [{1} = changedDate format (dateFormat: DateTime)])
+                dynamictext factReopen (content: 'Reopened  {1}x', contentparams: [{1} = ReopenCount])
+              }
+            }
+            container ctnLabels (class: 'card it-card') {
+              dynamictext lblLabels (content: 'Labels', class: 'it-section-label')
+              datagrid dgLabels (
+                datasource: $currentObject/IssueTracker.Issue_Label,
+                PageSize: 10,
+                class: 'datagrid-lined it-grid'
+              ) {
+                column colLblName (attribute: Name, caption: 'Label')
+              }
+            }
+          }
+        }
+      }
+
+      footer footerDetail {
+        actionbutton btnBack (caption: 'Close', action: close_page)
+      }
+    }
+  }
+}
+/
+
+-- -----------------------------------------------------------------------------
+-- Issue overview — the dense board
+-- -----------------------------------------------------------------------------
+
+create or replace page IssueTracker.Issue_Overview
+(
+  title: 'Issues',
+  layout: Atlas_Core.Atlas_Default,
+  folder: 'Issues',
+  url: 'issues'
+)
+{
+  container ctnOverviewPage (class: 'it-page background-main') {
+
+    container ctnOvHead (class: 'it-toolbar flex-row align-x-between align-y-center') {
+      container ctnOvTitle (class: 'flex-column') {
+        dynamictext txtOvEyebrow (content: 'All projects', class: 'it-eyebrow')
+        dynamictext txtOvTitle (content: 'Issues', rendermode: H2)
+      }
+      container ctnOvActions (class: 'flex-row align-y-center') {
+        actionbutton btnOvNew (caption: 'New issue', action: microflow IssueTracker.ACT_Issue_New, buttonstyle: primary, icon: 'Atlas_Core.Atlas_Filled.add')
+      }
+    }
+
+    container ctnOvGrid (class: 'card it-card it-card--flush') {
+      datagrid dgIssues (
+        datasource: database from IssueTracker.Issue sort by Priority asc, DueDate asc,
+        selection: Single,
+        PageSize: 25,
+        PagingPosition: both,
+        class: 'datagrid-hover datagrid-lined datagrid-sm it-grid'
+      ) {
+        column colNum (attribute: Number, caption: '#', ColumnWidth: manual, Size: 70, Alignment: right)
+        column colTitleO (attribute: "Title", caption: 'Title', WrapText: true, ColumnWidth: manual, Size: 320)
+        column colStatusO (
+          attribute: "Status", caption: 'Status',
+          ColumnWidth: manual, Size: 120,
+          DynamicCellClass: 'if $currentObject/Status = IssueTracker.IssueStatus.Blocked then ''it-cell-blocked'' else if $currentObject/Status = IssueTracker.IssueStatus.Closed then ''it-cell-done'' else ''it-cell-open'''
+        )
+        column colPrioO (
+          attribute: Priority, caption: 'Priority',
+          ColumnWidth: manual, Size: 110,
+          DynamicCellClass: 'if $currentObject/Priority = IssueTracker.IssuePriority.Critical then ''it-cell-critical'' else if $currentObject/Priority = IssueTracker.IssuePriority.High then ''it-cell-high'' else ''it-cell-normal'''
+        )
+        column colKindO (attribute: Kind, caption: 'Kind', ColumnWidth: manual, Size: 100)
+        column colProjO (attribute: Issue_Project/Code, caption: 'Project', ColumnWidth: manual, Size: 100)
+        column colAssigneeO (attribute: AssigneeName, caption: 'Assignee', ColumnWidth: manual, Size: 150)
+        column colDueO (
+          attribute: DueDate, caption: 'Due',
+          ColumnWidth: manual, Size: 120,
+          DynamicCellClass: 'if $currentObject/DueDate < [%CurrentDateTime%] then ''it-cell-overdue'' else '''''
+        )
+        column colEscO (attribute: IsEscalated, caption: 'Esc', ColumnWidth: manual, Size: 70, Alignment: center)
+        column colReopenO (attribute: ReopenCount, caption: 'Re', ColumnWidth: manual, Size: 60, Alignment: right)
+        column colUpdO (attribute: changedDate, caption: 'Updated', ColumnWidth: manual, Size: 150)
+        column colActO (caption: ' ', ColumnWidth: manual, Size: 90) {
+          actionbutton btnOpenIssue (caption: 'Open', action: show_page IssueTracker.Issue_Detail(Issue: $currentObject))
+        }
+      }
+    }
+  }
+}
+/
+
+-- -----------------------------------------------------------------------------
+-- Dashboard
+-- -----------------------------------------------------------------------------
+
+create or replace page IssueTracker.Dashboard
+(
+  title: 'Issue Tracker',
+  layout: Atlas_Core.Atlas_Default,
+  folder: 'Dashboard',
+  url: 'dashboard'
+)
+{
+  container ctnDashPage (class: 'it-page background-main') {
+
+    container ctnDashHead (class: 'it-toolbar flex-row align-x-between align-y-center') {
+      container ctnDashTitle (class: 'flex-column') {
+        dynamictext txtDashEyebrow (content: 'Operations', class: 'it-eyebrow')
+        dynamictext txtDashTitle (content: 'Issue Tracker', rendermode: H1)
+        dynamictext txtDashSub (content: 'Triage, work in progress and verification across all projects', class: 'it-muted')
+      }
+      container ctnDashActions (class: 'flex-row align-y-center') {
+        actionbutton btnDashSeed (caption: 'Load demo data', action: microflow IssueTracker.ACT_DemoData_Seed)
+        actionbutton btnDashAll (caption: 'All issues', action: show_page IssueTracker.Issue_Overview, icon: 'Atlas_Core.Atlas_Filled.list-bullets')
+        actionbutton btnDashNew (caption: 'New issue', action: microflow IssueTracker.ACT_Issue_New, buttonstyle: primary, icon: 'Atlas_Core.Atlas_Filled.add')
+      }
+    }
+
+    dataview dvStats (datasource: microflow IssueTracker.DS_DashboardStats) {
+      layoutgrid gridKpi {
+        row rowKpiA {
+          column colKpi1 (desktopwidth: 3, tabletwidth: 6, phonewidth: 6) {
+            container ctnKpi1 (class: 'card it-kpi') {
+              dynamictext kpi1Label (content: 'Open', class: 'it-kpi-label')
+              dynamictext kpi1Value (content: '{1}', contentparams: [{1} = TotalOpen], rendermode: H1, class: 'it-kpi-value')
+            }
+          }
+          column colKpi2 (desktopwidth: 3, tabletwidth: 6, phonewidth: 6) {
+            container ctnKpi2 (class: 'card it-kpi it-kpi--critical') {
+              dynamictext kpi2Label (content: 'Critical open', class: 'it-kpi-label')
+              dynamictext kpi2Value (content: '{1}', contentparams: [{1} = CriticalOpen], rendermode: H1, class: 'it-kpi-value')
+            }
+          }
+          column colKpi3 (desktopwidth: 3, tabletwidth: 6, phonewidth: 6) {
+            container ctnKpi3 (class: 'card it-kpi it-kpi--warn') {
+              dynamictext kpi3Label (content: 'Overdue', class: 'it-kpi-label')
+              dynamictext kpi3Value (content: '{1}', contentparams: [{1} = Overdue], rendermode: H1, class: 'it-kpi-value')
+            }
+          }
+          column colKpi4 (desktopwidth: 3, tabletwidth: 6, phonewidth: 6) {
+            container ctnKpi4 (class: 'card it-kpi') {
+              dynamictext kpi4Label (content: 'In progress', class: 'it-kpi-label')
+              dynamictext kpi4Value (content: '{1}', contentparams: [{1} = InProgress], rendermode: H1, class: 'it-kpi-value')
+            }
+          }
+        }
+        row rowKpiB {
+          column colKpi5 (desktopwidth: 3, tabletwidth: 6, phonewidth: 6) {
+            container ctnKpi5 (class: 'card it-kpi it-kpi--warn') {
+              dynamictext kpi5Label (content: 'Unassigned', class: 'it-kpi-label')
+              dynamictext kpi5Value (content: '{1}', contentparams: [{1} = Unassigned], rendermode: H1, class: 'it-kpi-value')
+            }
+          }
+          column colKpi6 (desktopwidth: 3, tabletwidth: 6, phonewidth: 6) {
+            container ctnKpi6 (class: 'card it-kpi it-kpi--info') {
+              dynamictext kpi6Label (content: 'Awaiting verification', class: 'it-kpi-label')
+              dynamictext kpi6Value (content: '{1}', contentparams: [{1} = AwaitingVerification], rendermode: H1, class: 'it-kpi-value')
+            }
+          }
+          column colKpi7 (desktopwidth: 3, tabletwidth: 6, phonewidth: 6) {
+            container ctnKpi7 (class: 'card it-kpi it-kpi--ok') {
+              dynamictext kpi7Label (content: 'Closed', class: 'it-kpi-label')
+              dynamictext kpi7Value (content: '{1}', contentparams: [{1} = ClosedTotal], rendermode: H1, class: 'it-kpi-value')
+            }
+          }
+          column colKpi8 (desktopwidth: 3, tabletwidth: 6, phonewidth: 6) {
+            container ctnKpi8 (class: 'card it-kpi') {
+              dynamictext kpi8Label (content: 'Reopened', class: 'it-kpi-label')
+              dynamictext kpi8Value (content: '{1}', contentparams: [{1} = ReopenedTotal], rendermode: H1, class: 'it-kpi-value')
+            }
+          }
+        }
+      }
+    }
+
+    layoutgrid gridDashBody {
+      row rowDashBody {
+
+        column colDashMine (desktopwidth: 6, tabletwidth: 12, phonewidth: 12) {
+          container ctnMine (class: 'card it-card it-card--flush') {
+            container ctnMineHead (class: 'it-card-head flex-row align-x-between align-y-center') {
+              dynamictext lblMine (content: 'My queue', class: 'it-section-label')
+              linkbutton lnkMineAll (caption: 'All issues', action: show_page IssueTracker.Issue_Overview)
+            }
+            datagrid dgMine (
+              datasource: microflow IssueTracker.DS_MyOpenIssues,
+              PageSize: 8,
+              class: 'datagrid-hover datagrid-lined datagrid-sm it-grid'
+            ) {
+              column colMineNum (attribute: Number, caption: '#', ColumnWidth: manual, Size: 60, Alignment: right)
+              column colMineTitle (attribute: "Title", caption: 'Title', WrapText: true, ColumnWidth: manual, Size: 320)
+              column colMinePrio (
+                attribute: Priority, caption: 'Priority', ColumnWidth: manual, Size: 100,
+                DynamicCellClass: 'if $currentObject/Priority = IssueTracker.IssuePriority.Critical then ''it-cell-critical'' else ''it-cell-normal'''
+              )
+              column colMineDue (attribute: DueDate, caption: 'Due', ColumnWidth: manual, Size: 110)
+              column colMineAct (caption: ' ', ColumnWidth: manual, Size: 80) {
+                actionbutton btnMineOpen (caption: 'Open', action: show_page IssueTracker.Issue_Detail(Issue: $currentObject))
+              }
+            }
+          }
+        }
+
+        column colDashTriage (desktopwidth: 6, tabletwidth: 12, phonewidth: 12) {
+          container ctnTriage (class: 'card it-card it-card--flush') {
+            container ctnTriageHead (class: 'it-card-head flex-row align-x-between align-y-center') {
+              dynamictext lblTriage (content: 'Needs triage', class: 'it-section-label')
+              dynamictext lblTriageHint (content: 'newest first', class: 'it-muted')
+            }
+            datagrid dgTriage (
+              datasource: database from IssueTracker.Issue where [Status = IssueTracker.IssueStatus.Reported] sort by createdDate desc,
+              PageSize: 8,
+              class: 'datagrid-hover datagrid-lined datagrid-sm it-grid'
+            ) {
+              column colTrNum (attribute: Number, caption: '#', ColumnWidth: manual, Size: 60, Alignment: right)
+              column colTrTitle (attribute: "Title", caption: 'Title', WrapText: true, ColumnWidth: manual, Size: 320)
+              column colTrKind (attribute: Kind, caption: 'Kind', ColumnWidth: manual, Size: 90)
+              column colTrProj (attribute: Issue_Project/Code, caption: 'Proj', ColumnWidth: manual, Size: 80)
+              column colTrAct (caption: ' ', ColumnWidth: manual, Size: 80) {
+                actionbutton btnTrOpen (caption: 'Open', action: show_page IssueTracker.Issue_Detail(Issue: $currentObject))
+              }
+            }
+          }
+        }
+      }
+    }
+
+    container ctnEsc (class: 'card it-card it-card--flush') {
+      container ctnEscHead (class: 'it-card-head flex-row align-x-between align-y-center') {
+        dynamictext lblEsc (content: 'Escalated and critical', class: 'it-section-label')
+        dynamictext lblEscHint (content: 'requires attention today', class: 'it-muted')
+      }
+      datagrid dgEsc (
+        datasource: database from IssueTracker.Issue where [IsEscalated = true] or [Priority = IssueTracker.IssuePriority.Critical] sort by DueDate asc,
+        PageSize: 10,
+        class: 'datagrid-hover datagrid-lined datagrid-sm it-grid'
+      ) {
+        column colEscNum (attribute: Number, caption: '#', ColumnWidth: manual, Size: 60, Alignment: right)
+        column colEscTitle (attribute: "Title", caption: 'Title', WrapText: true, ColumnWidth: manual, Size: 320)
+        column colEscStatus (attribute: "Status", caption: 'Status', ColumnWidth: manual, Size: 120)
+        column colEscPrio (
+          attribute: Priority, caption: 'Priority', ColumnWidth: manual, Size: 100,
+          DynamicCellClass: 'if $currentObject/Priority = IssueTracker.IssuePriority.Critical then ''it-cell-critical'' else ''it-cell-high'''
+        )
+        column colEscAssignee (attribute: AssigneeName, caption: 'Assignee', ColumnWidth: manual, Size: 150)
+        column colEscDue (attribute: DueDate, caption: 'Due', ColumnWidth: manual, Size: 110)
+        column colEscReopen (attribute: ReopenCount, caption: 'Re', ColumnWidth: manual, Size: 60, Alignment: right)
+        column colEscAct (caption: ' ', ColumnWidth: manual, Size: 80) {
+          actionbutton btnEscOpen (caption: 'Open', action: show_page IssueTracker.Issue_Detail(Issue: $currentObject))
+        }
+      }
+    }
+  }
+}
+/
+
+-- -----------------------------------------------------------------------------
+-- Reference data
+-- -----------------------------------------------------------------------------
+
+create or replace page IssueTracker.Project_NewEdit
+(
+  params: { $Project: IssueTracker.Project },
+  title: 'Project',
+  layout: Atlas_Core.PopupLayout,
+  folder: 'Admin',
+  PopupWidth: 640,
+  PopupHeight: 420
+)
+{
+  layoutgrid griddvProjectOuter { row rowdvProjectOuter { column coldvProjectOuter (desktopwidth: autofill) {
+  dataview dvProject (datasource: $Project, FormOrientation: Vertical) {
+    layoutgrid gridProject { row rowProject { column colProject (desktopwidth: autofill) {
+      textbox txtPrjCode (label: 'Code', attribute: Code)
+      textbox txtPrjName (label: 'Name', attribute: Name)
+      textarea txtPrjDesc (label: 'Description', attribute: "Description")
+      checkbox cbPrjActive (label: 'Active', attribute: IsActive)
+    } } }
+    footer footerProject {
+      actionbutton btnPrjSave (caption: 'Save', action: save_changes close_page, buttonstyle: primary)
+      actionbutton btnPrjCancel (caption: 'Cancel', action: cancel_changes)
+    }
+  }
+  } } }
+}
+/
+
+create or replace page IssueTracker.Label_NewEdit
+(
+  params: { $Label: IssueTracker.Label },
+  title: 'Label',
+  layout: Atlas_Core.PopupLayout,
+  folder: 'Admin',
+  PopupWidth: 560,
+  PopupHeight: 340
+)
+{
+  layoutgrid griddvLabelOuter { row rowdvLabelOuter { column coldvLabelOuter (desktopwidth: autofill) {
+  dataview dvLabel (datasource: $Label, FormOrientation: Vertical) {
+    layoutgrid gridLabel { row rowLabel { column colLabel (desktopwidth: autofill) {
+      textbox txtLblName (label: 'Name', attribute: Name)
+      textbox txtLblColor (label: 'Atlas colour class', attribute: ColorClass)
+    } } }
+    footer footerLabel {
+      actionbutton btnLblSave (caption: 'Save', action: save_changes close_page, buttonstyle: primary)
+      actionbutton btnLblCancel (caption: 'Cancel', action: cancel_changes)
+    }
+  }
+  } } }
+}
+/
+
+create or replace page IssueTracker.Project_Overview
+(
+  title: 'Projects',
+  layout: Atlas_Core.Atlas_Default,
+  folder: 'Admin',
+  url: 'projects'
+)
+{
+  container ctnProjPage (class: 'it-page background-main') {
+    container ctnProjHead (class: 'it-toolbar flex-row align-x-between align-y-center') {
+      dynamictext txtProjTitle (content: 'Projects', rendermode: H2)
+      actionbutton btnProjNew (caption: 'New project', action: create_object IssueTracker.Project then show_page IssueTracker.Project_NewEdit, buttonstyle: primary)
+    }
+    container ctnProjGrid (class: 'card it-card it-card--flush') {
+      datagrid dgProjects (
+        datasource: database from IssueTracker.Project sort by Code asc,
+        PageSize: 20,
+        class: 'datagrid-hover datagrid-lined datagrid-sm it-grid'
+      ) {
+        column colPrjCode (attribute: Code, caption: 'Code', ColumnWidth: manual, Size: 100)
+        column colPrjName (attribute: Name, caption: 'Name', ColumnWidth: manual, Size: 220)
+        column colPrjDesc (attribute: "Description", caption: 'Description', WrapText: true, ColumnWidth: manual, Size: 300)
+        column colPrjActive (attribute: IsActive, caption: 'Active', ColumnWidth: manual, Size: 80, Alignment: center)
+        column colPrjAct (caption: ' ', ColumnWidth: manual, Size: 80) {
+          actionbutton btnPrjEdit (caption: 'Edit', action: show_page IssueTracker.Project_NewEdit(Project: $currentObject))
+        }
+      }
+    }
+  }
+}
+/
+
+create or replace page IssueTracker.Label_Overview
+(
+  title: 'Labels',
+  layout: Atlas_Core.Atlas_Default,
+  folder: 'Admin',
+  url: 'labels'
+)
+{
+  container ctnLblPage (class: 'it-page background-main') {
+    container ctnLblHead (class: 'it-toolbar flex-row align-x-between align-y-center') {
+      dynamictext txtLblTitle (content: 'Labels', rendermode: H2)
+      actionbutton btnLblNew (caption: 'New label', action: create_object IssueTracker.Label then show_page IssueTracker.Label_NewEdit, buttonstyle: primary)
+    }
+    container ctnLblGrid (class: 'card it-card it-card--flush') {
+      datagrid dgLabelsAll (
+        datasource: database from IssueTracker.Label sort by Name asc,
+        PageSize: 20,
+        class: 'datagrid-hover datagrid-lined datagrid-sm it-grid'
+      ) {
+        column colLblN (attribute: Name, caption: 'Label', ColumnWidth: manual, Size: 220)
+        column colLblColor (attribute: ColorClass, caption: 'Atlas colour class', ColumnWidth: manual, Size: 240)
+        column colLblAct (caption: ' ', ColumnWidth: manual, Size: 80) {
+          actionbutton btnLblEdit (caption: 'Edit', action: show_page IssueTracker.Label_NewEdit(Label: $currentObject))
+        }
+      }
+    }
+  }
+}
+/
+
+-- -----------------------------------------------------------------------------
+-- Workflow monitor (fills the phase-2 stub)
+-- -----------------------------------------------------------------------------
+
+create or modify page IssueTracker.WF_Overview
+(
+  title: 'Workflow monitor',
+  layout: Atlas_Core.Atlas_Default,
+  folder: 'Workflow',
+  url: 'workflows'
+)
+{
+  container ctnWfPage (class: 'it-page background-main') {
+    container ctnWfHead (class: 'it-toolbar flex-column') {
+      dynamictext txtWfEyebrow (content: 'Issue Handling', class: 'it-eyebrow')
+      dynamictext txtWfTitle (content: 'Workflow monitor', rendermode: H2)
+    }
+
+    container ctnWfTasks (class: 'card it-card it-card--flush') {
+      container ctnWfTasksHead (class: 'it-card-head flex-row align-x-between align-y-center') {
+        dynamictext lblWfTasks (content: 'Open user tasks', class: 'it-section-label')
+        dynamictext lblWfTasksHint (content: 'unfinished tasks across all issues', class: 'it-muted')
+      }
+      datagrid dgWfTasks (
+        datasource: database from System.WorkflowUserTask where [EndTime = empty] sort by StartTime desc,
+        PageSize: 15,
+        class: 'datagrid-hover datagrid-lined datagrid-sm it-grid'
+      ) {
+        column colWfTaskName (attribute: Name, caption: 'Task', ColumnWidth: manual, Size: 200)
+        column colWfTaskDesc (attribute: "Description", caption: 'Description', WrapText: true, ColumnWidth: manual, Size: 300)
+        column colWfTaskDue (attribute: DueDate, caption: 'Due', ColumnWidth: manual, Size: 140)
+        column colWfTaskStart (attribute: StartTime, caption: 'Started', ColumnWidth: manual, Size: 150)
+        column colWfTaskOutcome (attribute: Outcome, caption: 'Outcome', ColumnWidth: manual, Size: 120)
+      }
+    }
+
+    container ctnWfInstances (class: 'card it-card it-card--flush') {
+      container ctnWfInstHead (class: 'it-card-head flex-row align-x-between align-y-center') {
+        dynamictext lblWfInst (content: 'Workflow instances', class: 'it-section-label')
+        dynamictext lblWfInstHint (content: 'newest first', class: 'it-muted')
+      }
+      datagrid dgWfInstances (
+        datasource: database from System.Workflow sort by StartTime desc,
+        PageSize: 15,
+        class: 'datagrid-hover datagrid-lined datagrid-sm it-grid'
+      ) {
+        column colWfName (attribute: Name, caption: 'Instance', ColumnWidth: manual, Size: 220)
+        column colWfStart (attribute: StartTime, caption: 'Started', ColumnWidth: manual, Size: 160)
+        column colWfEnd (attribute: EndTime, caption: 'Ended', ColumnWidth: manual, Size: 160)
+        column colWfDue (attribute: DueDate, caption: 'Due', ColumnWidth: manual, Size: 160)
+      }
+    }
+  }
+}
+/

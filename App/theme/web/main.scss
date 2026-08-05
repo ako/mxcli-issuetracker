@@ -1,3 +1,7 @@
 @import "custom-variables";
 @import "theme-dark";
 @import "theme-neutral";
+
+// Issue Tracker `it-` utility layer (KPI tiles, dense grids, status tints).
+// Imported last so it can build on Atlas's tokens and win specificity ties.
+@import "issuetracker";

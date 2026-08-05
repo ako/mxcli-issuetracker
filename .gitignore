@@ -1,30 +1,35 @@
 # Mendix project
 #
-# Patterns are intentionally NOT root-anchored: each Mendix app lives in its own
-# subfolder (App/, and any future sibling apps), so these must match at any
-# depth. mxcli generates them root-anchored, which only works for a single app
+# Each Mendix app lives in its own subfolder (App/, and any future siblings), so
+# these patterns must match at any depth. mxcli generates them root-anchored
+# (/deployment/, /javasource/system/, …), which only works for a single app
 # sitting directly in the repo root.
+#
+# Note the `**/` prefixes: a gitignore pattern that *contains* a slash is
+# anchored to the .gitignore's directory even without a leading one, so
+# `javasource/*/proxies/` alone would NOT match `App/javasource/x/proxies/`.
+# Single-segment patterns (deployment/, .classpath) match at any depth already.
 **/node_modules/
-!javascriptsource/**/node_modules/
+!**/javascriptsource/**/node_modules/
 *.launch
 .classpath
 .mendix-cache/
 .project
 deployment/
-javasource/*/proxies/
-javasource/system/
+**/javasource/*/proxies/
+**/javasource/system/
 modeler-merge-marker
-nativemobile/builds/
+**/nativemobile/builds/
 packages/
 project-settings.user.json
 releases/
 *.mpr.lock
 *.mpr.bak
-vendorlib/temp/
+**/vendorlib/temp/
 .svn/
 
 # MPR v2 journal files
-mprcontents/mprjournal*
+**/mprcontents/mprjournal*
 
 # OS
 .DS_Store

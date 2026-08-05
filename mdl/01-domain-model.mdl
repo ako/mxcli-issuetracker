@@ -1,0 +1,185 @@
+-- =============================================================================
+-- Issue Tracker — Phase 1: domain model
+-- Module, enumerations, entities, associations, indexes.
+-- =============================================================================
+
+create module IssueTracker;
+/
+
+-- -----------------------------------------------------------------------------
+-- Enumerations
+-- -----------------------------------------------------------------------------
+
+/**
+ * Lifecycle of an issue. Mirrors the states the handling workflow drives it
+ * through, so the board and the workflow never disagree.
+ */
+create enumeration IssueTracker.IssueStatus (
+  Reported 'New',
+  Triaged 'Triaged',
+  InProgress 'In Progress',
+  Blocked 'Blocked',
+  Resolved 'Resolved',
+  Verified 'Verified',
+  Closed 'Closed',
+  Rejected 'Rejected'
+);
+/
+
+/**
+ * Business urgency. Drives the workflow's escalation decision.
+ */
+create enumeration IssueTracker.IssuePriority (
+  Critical 'Critical',
+  High 'High',
+  Medium 'Medium',
+  Low 'Low'
+);
+/
+
+/**
+ * What kind of work the issue represents.
+ */
+create enumeration IssueTracker.IssueKind (
+  Bug 'Bug',
+  Feature 'Feature',
+  Task 'Task',
+  Question 'Question'
+);
+/
+
+-- -----------------------------------------------------------------------------
+-- Entities
+-- -----------------------------------------------------------------------------
+
+/**
+ * A product or component that issues are filed against.
+ */
+create persistent entity IssueTracker.Project (
+  Code: string(10) not null,
+  Name: string(100) not null,
+  Description: string(500),
+  IsActive: boolean default true,
+  CreatedDate: autocreateddate
+)
+index idx_project_code (Code);
+/
+
+/**
+ * A free-form tag that can be attached to many issues (many-to-many).
+ * ColorClass holds an Atlas background utility class so the chip is themed.
+ */
+create persistent entity IssueTracker.Label (
+  Name: string(40) not null,
+  ColorClass: string(40) default 'background-secondary'
+);
+/
+
+/**
+ * The core record. Number is a human-facing sequential id; the workflow drives
+ * Status, and ResolvedOn / ResolutionNotes / ReopenCount capture its outcome.
+ */
+create persistent entity IssueTracker.Issue (
+  Number: autonumber default 1,
+  Title: string(200) not null,
+  Description: string(4000),
+  Status: IssueTracker.IssueStatus default Reported,
+  Priority: IssueTracker.IssuePriority default Medium,
+  Kind: IssueTracker.IssueKind default Bug,
+  DueDate: datetime,
+  ResolvedOn: datetime,
+  ResolutionNotes: string(1000),
+  ReopenCount: integer default 0,
+  IsEscalated: boolean default false,
+  -- Denormalised display names. Page widgets cannot bind an attribute *through*
+  -- an association whose target lives in System (mxcli writes an unresolvable
+  -- path), so the names are copied here for grids and detail panes. See
+  -- FINDINGS finding 19.
+  AssigneeName: string(200),
+  ReporterName: string(200),
+  CreatedDate: autocreateddate,
+  ChangedDate: autochangeddate
+)
+index idx_issue_status (Status)
+index idx_issue_priority (Priority);
+/
+
+/**
+ * A note on an issue. Deleted with its issue.
+ */
+create persistent entity IssueTracker.Comment (
+  Body: string(2000) not null,
+  AuthorName: string(200),
+  CreatedDate: autocreateddate
+);
+/
+
+/**
+ * Non-persistent carrier for the dashboard KPI tiles. Filled by
+ * IssueTracker.DS_DashboardStats — no table, no commit.
+ */
+create non-persistent entity IssueTracker.DashboardStats (
+  TotalOpen: integer default 0,
+  CriticalOpen: integer default 0,
+  InProgress: integer default 0,
+  Unassigned: integer default 0,
+  Overdue: integer default 0,
+  AwaitingVerification: integer default 0,
+  ClosedTotal: integer default 0,
+  ReopenedTotal: integer default 0
+);
+/
+
+-- -----------------------------------------------------------------------------
+-- Associations
+-- -----------------------------------------------------------------------------
+
+/**
+ * Every issue belongs to one project.
+ */
+create association IssueTracker.Issue_Project
+from IssueTracker.Issue to IssueTracker.Project
+type reference;
+/
+
+/**
+ * Who filed the issue.
+ */
+create association IssueTracker.Issue_Reporter
+from IssueTracker.Issue to System.User
+type reference;
+/
+
+/**
+ * Who is working on it. Empty means unassigned (a dashboard KPI).
+ */
+create association IssueTracker.Issue_Assignee
+from IssueTracker.Issue to System.User
+type reference;
+/
+
+/**
+ * Comments belong to an issue and are removed with it.
+ */
+create association IssueTracker.Comment_Issue
+from IssueTracker.Comment to IssueTracker.Issue
+type reference
+delete_behavior DELETE_AND_REFERENCES;
+/
+
+/**
+ * Who wrote the comment.
+ */
+create association IssueTracker.Comment_Author
+from IssueTracker.Comment to System.User
+type reference;
+/
+
+/**
+ * Issues carry many labels; a label is used by many issues.
+ */
+create association IssueTracker.Issue_Label
+from IssueTracker.Issue to IssueTracker.Label
+type reference_set
+owner both;
+/

@@ -1,0 +1,62 @@
+-- =============================================================================
+-- Issue Tracker — Phase 4: the issue-handling workflow
+--
+-- Context entity: IssueTracker.Issue. Each instance governs one issue from
+-- triage through to closure. The task pages bound below are the only place a
+-- transition can be made, and the outcome handlers in phase 5 keep
+-- Issue.Status in step with the workflow's position.
+--
+-- Shape:
+--   Triage ──Accept────> Work ──Resolved──> Verify ──Close──> closed (end)
+--     │                   │                   │
+--     │                   └──NeedsInfo        └──Reopen
+--     └──Reject──> rejected (end)
+--
+-- SUB_Issue_SetTriaged also flags Critical issues as escalated, so priority
+-- routing happens without a separate decision node.
+--
+-- Three constructs are deliberately absent because mxcli writes them in shapes
+-- the Mendix model rejects (see FINDINGS findings 15-17):
+--   * `annotation` in a workflow body — the model then cannot be loaded at all
+--   * `jump to <Task>` — writes the target as a *comment*, leaving the Jump's
+--     Target unset (CE6680) and naming the Jump after its target (CE0495)
+--   * an interrupting timer `boundary event` — must terminate in a jump or end
+--     (CE6665), which the broken jump cannot provide
+--   * `decision '<expression>'` — the expression form yields CE0117
+--
+-- The NeedsInfo and Reopen loops are therefore implemented in the outcome
+-- handlers (ACT_Task_WorkBlock / ACT_Task_VerifyReopen), which clear the issue's
+-- workflow link and start a fresh instance. Same user-visible behaviour — the
+-- issue goes back round — without unbuildable jump activities.
+-- =============================================================================
+
+create or replace workflow IssueTracker.WF_IssueHandling
+  parameter $Context: IssueTracker.Issue
+  display 'Issue Handling'
+  description 'Drives an issue from triage through resolution and verification to closure.'
+  overview page IssueTracker.WF_Overview
+begin
+
+  user task Triage 'Triage the issue'
+    page IssueTracker.WF_TriageTask
+    description 'Confirm the report is valid, set the priority, then accept it into the backlog or reject it.'
+    outcomes
+      'Accept' { call microflow IssueTracker.SUB_Issue_SetTriaged with (IssueTracker.SUB_Issue_SetTriaged.Issue = '$workflowContext'); }
+      'Reject' { call microflow IssueTracker.SUB_Issue_SetRejected with (IssueTracker.SUB_Issue_SetRejected.Issue = '$workflowContext'); };
+
+  user task Work 'Work on the issue'
+    page IssueTracker.WF_WorkTask
+    description 'Implement the fix and record resolution notes, or send it back to triage if information is missing.'
+    outcomes
+      'Resolved'  { }
+      'NeedsInfo' { };
+
+  user task Verify 'Verify the fix'
+    page IssueTracker.WF_VerifyTask
+    description 'Check that the fix holds. Close the issue, or reopen it to send it back to the assignee.'
+    outcomes
+      'Close'  { call microflow IssueTracker.SUB_Issue_SetClosed with (IssueTracker.SUB_Issue_SetClosed.Issue = '$workflowContext'); }
+      'Reopen' { };
+
+end workflow;
+/

@@ -1,0 +1,175 @@
+-- =============================================================================
+-- Issue Tracker — Phase 7: workflow task pages
+--
+-- These fill the phase-2 stubs with CREATE OR MODIFY, so the IDs the workflow's
+-- user tasks are bound to survive.
+--
+-- Each page gets one parameter, $Task: System.WorkflowUserTask — that is what
+-- Mendix hands a user task page. The issue under handling is reached with a
+-- DATABASE datasource plus an XPath constraint back through the task's workflow:
+--
+--   database from IssueTracker.Issue
+--     where [IssueTracker.Issue_Workflow = $Task/System.WorkflowUserTask_Workflow]
+--
+-- That indirection is deliberate. The obvious alternatives are both unusable:
+--   * a microflow datasource taking $Task — mxcli parses the argument but never
+--     persists it, so the build fails CE1571 (FINDINGS finding 13)
+--   * a nested reverse association path from System.Workflow back into
+--     IssueTracker — mxcli writes a structurally invalid page and the .mpr can
+--     no longer be loaded at all (FINDINGS finding 14)
+-- =============================================================================
+
+create or modify page IssueTracker.WF_TriageTask
+(
+  params: { $Task: System.WorkflowUserTask },
+  title: 'Triage issue',
+  layout: Atlas_Core.Atlas_Default,
+  folder: 'Workflow'
+)
+{
+  container ctnTriagePage (class: 'it-page background-main') {
+
+    dataview dvTriageTask (datasource: $Task) {
+      container ctnTriageHead (class: 'it-toolbar flex-column') {
+        container ctnTriageEyebrow (class: 'it-eyebrow-wrap') {
+          dynamictext txtTriageEyebrow (content: 'Workflow task — step 1 of 3', class: 'it-eyebrow')
+        }
+        dynamictext txtTriageName (Attribute: Name, rendermode: H2)
+        container ctnTriageDescWrap (class: 'it-muted-wrap') {
+          dynamictext txtTriageDesc (Attribute: Description, class: 'it-muted')
+        }
+      }
+    }
+
+    container ctnTriageIssue (class: 'card it-card it-card--flush') {
+      container ctnTriageIssueHead (class: 'it-card-head flex-row align-x-between align-y-center') {
+        dynamictext lblTriageIssue (content: 'Issue under triage', class: 'it-section-label')
+        dynamictext lblTriageHint (content: 'confirm it is valid, set the priority, then accept or reject', class: 'it-muted')
+      }
+      datagrid dgTriageIssue (
+        datasource: database from IssueTracker.Issue where [IssueTracker.Issue_Workflow = $Task/System.WorkflowUserTask_Workflow],
+        class: 'datagrid-lined datagrid-sm it-grid'
+      ) {
+        column colTgNum (attribute: Number, caption: '#', ColumnWidth: manual, Size: 70, Alignment: right)
+        column colTgTitle (attribute: "Title", caption: 'Title', WrapText: true, ColumnWidth: manual, Size: 320)
+        column colTgKind (attribute: Kind, caption: 'Kind', ColumnWidth: manual, Size: 100)
+        column colTgPrio (attribute: Priority, caption: 'Priority', ColumnWidth: manual, Size: 110)
+        column colTgProj (attribute: Issue_Project/Code, caption: 'Project', ColumnWidth: manual, Size: 100)
+        column colTgReporter (attribute: ReporterName, caption: 'Reported by', ColumnWidth: manual, Size: 160)
+        column colTgDesc (attribute: "Description", caption: 'Description', WrapText: true, ColumnWidth: manual, Size: 300)
+        column colTgAct (caption: ' ', ColumnWidth: manual, Size: 110) {
+          actionbutton btnTgOpen (caption: 'Open', action: show_page IssueTracker.Issue_Detail(Issue: $currentObject))
+        }
+      }
+    }
+
+    container ctnTriageActions (class: 'it-actionbar flex-row align-x-right align-y-center') {
+      actionbutton btnTriageReject (caption: 'Reject issue', action: microflow IssueTracker.ACT_Task_TriageReject(Task: $Task), buttonstyle: danger)
+      actionbutton btnTriageAccept (caption: 'Accept into backlog', action: microflow IssueTracker.ACT_Task_TriageAccept(Task: $Task), buttonstyle: success, icon: 'Atlas_Core.Atlas_Filled.checkmark')
+    }
+  }
+}
+/
+
+create or modify page IssueTracker.WF_WorkTask
+(
+  params: { $Task: System.WorkflowUserTask },
+  title: 'Work on issue',
+  layout: Atlas_Core.Atlas_Default,
+  folder: 'Workflow'
+)
+{
+  container ctnWorkPage (class: 'it-page background-main') {
+
+    dataview dvWorkTask (datasource: $Task) {
+      container ctnWorkHead (class: 'it-toolbar flex-column') {
+        container ctnWorkEyebrow (class: 'it-eyebrow-wrap') {
+          dynamictext txtWorkEyebrow (content: 'Workflow task — step 2 of 3', class: 'it-eyebrow')
+        }
+        dynamictext txtWorkName (Attribute: Name, rendermode: H2)
+        container ctnWorkDescWrap (class: 'it-muted-wrap') {
+          dynamictext txtWorkDesc (Attribute: Description, class: 'it-muted')
+        }
+      }
+    }
+
+    container ctnWorkIssue (class: 'card it-card it-card--flush') {
+      container ctnWorkIssueHead (class: 'it-card-head flex-row align-x-between align-y-center') {
+        dynamictext lblWorkIssue (content: 'Assigned issue', class: 'it-section-label')
+        dynamictext lblWorkHint (content: 'record resolution notes on the issue before resolving', class: 'it-muted')
+      }
+      datagrid dgWorkIssue (
+        datasource: database from IssueTracker.Issue where [IssueTracker.Issue_Workflow = $Task/System.WorkflowUserTask_Workflow],
+        class: 'datagrid-lined datagrid-sm it-grid'
+      ) {
+        column colWkNum (attribute: Number, caption: '#', ColumnWidth: manual, Size: 70, Alignment: right)
+        column colWkTitle (attribute: "Title", caption: 'Title', WrapText: true, ColumnWidth: manual, Size: 320)
+        column colWkStatus (attribute: "Status", caption: 'Status', ColumnWidth: manual, Size: 120)
+        column colWkPrio (attribute: Priority, caption: 'Priority', ColumnWidth: manual, Size: 110)
+        column colWkAssignee (attribute: AssigneeName, caption: 'Assignee', ColumnWidth: manual, Size: 160)
+        column colWkDue (attribute: DueDate, caption: 'Due', ColumnWidth: manual, Size: 120)
+        column colWkRes (attribute: ResolutionNotes, caption: 'Resolution notes', WrapText: true, ColumnWidth: manual, Size: 300)
+        column colWkAct (caption: ' ', ColumnWidth: manual, Size: 110) {
+          actionbutton btnWkEdit (caption: 'Edit', action: show_page IssueTracker.Issue_NewEdit(Issue: $currentObject), buttonstyle: primary)
+        }
+      }
+    }
+
+    container ctnWorkActions (class: 'it-actionbar flex-row align-x-right align-y-center') {
+      actionbutton btnWorkBlock (caption: 'Needs more info', action: microflow IssueTracker.ACT_Task_WorkBlock(Task: $Task), buttonstyle: warning)
+      actionbutton btnWorkResolve (caption: 'Mark resolved', action: microflow IssueTracker.ACT_Task_WorkResolve(Task: $Task), buttonstyle: success, icon: 'Atlas_Core.Atlas_Filled.checkmark')
+    }
+  }
+}
+/
+
+create or modify page IssueTracker.WF_VerifyTask
+(
+  params: { $Task: System.WorkflowUserTask },
+  title: 'Verify fix',
+  layout: Atlas_Core.Atlas_Default,
+  folder: 'Workflow'
+)
+{
+  container ctnVerifyPage (class: 'it-page background-main') {
+
+    dataview dvVerifyTask (datasource: $Task) {
+      container ctnVerifyHead (class: 'it-toolbar flex-column') {
+        container ctnVerifyEyebrow (class: 'it-eyebrow-wrap') {
+          dynamictext txtVerifyEyebrow (content: 'Workflow task — step 3 of 3', class: 'it-eyebrow')
+        }
+        dynamictext txtVerifyName (Attribute: Name, rendermode: H2)
+        container ctnVerifyDescWrap (class: 'it-muted-wrap') {
+          dynamictext txtVerifyDesc (Attribute: Description, class: 'it-muted')
+        }
+      }
+    }
+
+    container ctnVerifyIssue (class: 'card it-card it-card--flush') {
+      container ctnVerifyIssueHead (class: 'it-card-head flex-row align-x-between align-y-center') {
+        dynamictext lblVerifyIssue (content: 'Resolved issue', class: 'it-section-label')
+        dynamictext lblVerifyHint (content: 'reopening sends it back to the assignee and increments the reopen count', class: 'it-muted')
+      }
+      datagrid dgVerifyIssue (
+        datasource: database from IssueTracker.Issue where [IssueTracker.Issue_Workflow = $Task/System.WorkflowUserTask_Workflow],
+        class: 'datagrid-lined datagrid-sm it-grid'
+      ) {
+        column colVfNum (attribute: Number, caption: '#', ColumnWidth: manual, Size: 70, Alignment: right)
+        column colVfTitle (attribute: "Title", caption: 'Title', WrapText: true, ColumnWidth: manual, Size: 320)
+        column colVfRes (attribute: ResolutionNotes, caption: 'Resolution notes', WrapText: true, ColumnWidth: manual, Size: 300)
+        column colVfResolved (attribute: ResolvedOn, caption: 'Resolved', ColumnWidth: manual, Size: 150)
+        column colVfAssignee (attribute: AssigneeName, caption: 'Resolved by', ColumnWidth: manual, Size: 160)
+        column colVfReopen (attribute: ReopenCount, caption: 'Re', ColumnWidth: manual, Size: 60, Alignment: right)
+        column colVfAct (caption: ' ', ColumnWidth: manual, Size: 110) {
+          actionbutton btnVfOpen (caption: 'Open', action: show_page IssueTracker.Issue_Detail(Issue: $currentObject))
+        }
+      }
+    }
+
+    container ctnVerifyActions (class: 'it-actionbar flex-row align-x-right align-y-center') {
+      actionbutton btnVerifyReopen (caption: 'Reopen', action: microflow IssueTracker.ACT_Task_VerifyReopen(Task: $Task), buttonstyle: danger)
+      actionbutton btnVerifyClose (caption: 'Verify and close', action: microflow IssueTracker.ACT_Task_VerifyClose(Task: $Task), buttonstyle: success, icon: 'Atlas_Core.Atlas_Filled.checkmark')
+    }
+  }
+}
+/
