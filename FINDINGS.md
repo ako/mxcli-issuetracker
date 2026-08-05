@@ -134,3 +134,178 @@ and available if someone wants it locally.
 
 It also prints `WARNING: This is a vibe-coded PoC, alpha quality, use with
 caution.` — accurate expectation-setting, not a problem.
+
+## 7. Boot verified: HTTP 200 on the first try, ~19s cold
+
+`./mxcli run --local -p App.mpr` (backgrounded) reached a serving state without
+intervention:
+
+```
+Starting mxbuild --serve...
+Building (first build is cold, ~10-15s)...
+Bundling web client...
+  Web client bundled in 9.513s
+Runtime started; app serving at http://127.0.0.1:8080/
+```
+
+**Verified** by polling `curl` from launch until it answered:
+
+| Check | Result |
+| --- | --- |
+| Time from launch to first `200` | ~19 s |
+| `GET http://localhost:8080/` | `200 OK`, `Content-Type: text/html;charset=utf-8`, `Content-Length: 1706` |
+| Body | the real Mendix web client `index.html` (async/arrow-function browser check, then client bootstrap) — not a placeholder |
+| `GET /index.html` | `200` |
+| `GET /xas/` | `401` — expected, the runtime data endpoint requires a session |
+
+`.mxcli/runtime.log` ends with
+`Core: Mendix Runtime successfully started, the application is now available.`
+It is **not** warning-free, though — see finding 7a for what is in there.
+
+### 7a. Runtime log warnings on a clean boot (all benign, one worth knowing)
+
+`grep -icE "error|warn|exception|severe" .mxcli/runtime.log` → 8 lines across
+two boots (the `--local` run and the `--hub` run). None of them indicate a
+broken app:
+
+- `WARNING - Core: MxAdmin user with username 'MxAdmin' does not exist!` — a
+  blank scaffolded app ships no administrator user. Expected; you cannot log
+  into the app until you create one.
+- `WARNING - LicenseService: The runtime has been started using a trial
+  license, the framework will be terminated when the maximum time is
+  exceeded!` — expected for an unlicensed local runtime. **Worth knowing: a
+  long-lived `mxcli run` will eventually self-terminate.** If a session finds
+  the app dead after a long idle period, this is the likely cause, not a crash.
+- `WARNING - Connector: Only content type 'application/json' is allowed (found
+  'null').` — this was *my own* `curl http://localhost:8080/xas/` probe (no
+  `Content-Type` header), not a spontaneous runtime problem. Timestamps line up
+  exactly (18:19:29). Noting it so a future session doesn't chase it.
+
+### 7b. Shutting the runtime down raises an unhandled exception
+
+Stopping the backgrounded `--local` run logged:
+
+```
+ERROR - M2EE: An error occurred while executing action 'shutdown'.
+com.mendix.m2ee.api.internal.AdminException: An unhandled exception occurred!
+Caused by: java.lang.IllegalStateException: Shutdown in progress
+```
+
+The process did exit and port 8080 was released cleanly (verified: `curl`
+`Failed to connect`, no listener), so this is cosmetic — but it looks like mxcli
+issues an admin `shutdown` action *while* the JVM shutdown hook is already
+running, so the two race. Harmless here; would be noise in any CI log that
+starts and stops the app. Reproduced on the first stop; not retried.
+
+## 8. Hub preview works; the public URL is behind GitHub OAuth (so `curl` sees 302, not 200)
+
+`MXCLI_HUB_KEY` **was** set on this environment, so
+`./mxcli run --hub https://hub.mxcli.org -p App.mpr` worked:
+
+```
+Registering with hub https://hub.mxcli.org...
+client: Connecting to wss://hub.mxcli.org:443 via http://127.0.0.1:45461
+Tunnel: exposing local :8080 at https://app-claude-mendix-app-mxcli-setup-b0o6qv.mxcli.org (via proxy)
+Preview available at https://app-claude-mendix-app-mxcli-setup-b0o6qv.mxcli.org
+client: Connected (Latency 154.111263ms)
+```
+
+**Preview URL:** `https://app-claude-mendix-app-mxcli-setup-b0o6qv.mxcli.org`
+(derived from the git branch name — `app-<branch>` — so it changes with the
+branch).
+
+**Verified:**
+
+- `curl https://app-claude-...mxcli.org/` → **`302`** redirecting to
+  `https://hub.mxcli.org/auth/github/login?return=…`. The hub gates previews
+  behind a GitHub login, so an unauthenticated HTTP client will never see 200.
+  Not a bug — just don't script a `200` assertion against the preview URL. A
+  human opening it in a browser logs in with GitHub and gets the app.
+- `curl http://localhost:8080/` → still `200` while the tunnel is up, so
+  `--hub` does not change local serving (it implies `--local`).
+- Round-trip latency through the tunnel was ~9.6 s for the first request
+  (cold proxy + OAuth redirect); the tunnel itself reported 154 ms.
+
+**Note on ports:** `--hub` implies `--local` and also binds `:8080`, so an
+already-running `mxcli run --local` must be stopped first or the second run
+collides. Nothing in the output warns about this in advance.
+
+## 9. `mxcli lint` on a *blank* app reports 106 issues, ~96% of them un-actionable
+
+`./mxcli lint -p App.mpr` on the freshly scaffolded project: **106 issues
+(0 errors, 44 warnings, 62 info)**, exit code 0.
+
+Breakdown by rule:
+
+| Rule | Count | Notes |
+| --- | --- | --- |
+| `QUAL002` (no documentation) | 50 | almost all on `System.*` entities |
+| `SEC001` (no access rules) | 38 | all on `System.*` entities |
+| `CONV001` (boolean naming) | 8 | `System.*`, e.g. `BackgroundJob.Successful` → "should be `IsSuccessful`" |
+| `DESIGN001` | 4 | |
+| `MPR003`, `SEC006`, `QUAL004`, `CUSTOM002`, `CONV003`, `CONV008` | 1 each | |
+
+**102 of the issue locations are in the built-in `System` module**, which a
+developer cannot edit. Highlights of the noise:
+
+- `⚠ Module 'System' has 38 persistent entities (max 15). Consider splitting
+  into smaller modules. [MPR003]` → *"Split module 'System' into smaller
+  modules"*. Not possible; `System` is Mendix-owned.
+- `⚠ Persistent entity 'System.WorkflowGroup' has no access rules [SEC001]`
+  (×38) with a `GRANT <Role> ON System.… ` suggestion.
+- `ℹ Boolean attribute 'BackgroundJob.Successful' should start with Is, Has,
+  Can…` — renaming a platform attribute is not an option.
+
+Only **4 findings are about the developer's own code**, and all four are the
+scaffolded template content, which is exactly what you'd want a linter to say:
+
+- `MyFirstModule.User` module role maps to 2 user roles (`CONV008`)
+- page `Home_Web` has no recognized suffix (`CONV003`)
+- microflow `MyFirstLogic` lacks a standard prefix (`CUSTOM002`)
+- microflow `MyFirstLogic` is never called (`QUAL004`)
+
+**Suggested fix for mxcli:** exclude platform modules (`System`, and arguably
+`Administration`/`Atlas_*`) from lint by default, or add a
+`--skip-platform-modules` / `--modules <list>` filter. As it stands, the signal
+is buried at a 25:1 ratio on an empty project, which trains you to ignore the
+output. Verified by re-running lint and counting `at System.` occurrences
+(102/106).
+
+## 10. Misc / small stuff
+
+- `mxcli new` runs `mxcli init` as its step 3, so the `mxcli init --tool claude`
+  in the documented flow is a **no-op re-run** on a fresh `new`. It is
+  idempotent and harmless (it re-emits `AGENTS.md`, updates `.devcontainer/`,
+  re-adds the SessionStart hook, regenerates 42 widget docs), and it is a
+  genuinely useful repair step after the finding-2/3 workaround.
+- `mxcli init` commits a 205 KB `.claude/vscode-mdl.vsix` blob into the repo —
+  it is *not* in the generated `.gitignore`. Left in place here (it is part of
+  `.claude/`), but it is a regenerable build artifact and is probably ignore
+  material.
+- `.gitignore` correctly excludes the 88 MB `mxcli` binary, `.mxcli/`,
+  `.claude/settings.local.json`, and `mprcontents/mprjournal*`.
+- `theme-cache/web/theme.compiled.css` (~29 k lines) **is** committed — also a
+  build artifact, also not ignored. Left as generated.
+- Version caches (`/root/.mxcli/mxbuild/11.6.3`, `/root/.mxcli/runtime/11.6.3`)
+  live outside the repo and do not survive container reaping. Expect a fresh
+  session to re-download the 325 MB runtime via the SessionStart hook.
+- All output is prefixed with `WARNING: This is a vibe-coded PoC, alpha quality,
+  use with caution.` — noted so nobody mistakes it for a per-command warning.
+
+---
+
+## Verification summary
+
+| Step | Command | Result |
+| --- | --- | --- |
+| mxcli available | `./mxcli --version` | ✅ `nightly-20260805-4fda072f` (downloaded; not pre-installed — finding 1) |
+| App created | `mxcli new App --version 11.6.3` | ✅ via temp-dir workaround (finding 2) |
+| Claude tooling | `./mxcli init --tool claude` | ✅ hook + commands + lint rules present |
+| Prereqs up | `./mxcli run --local --setup --ensure-db -p App.mpr` | ✅ MxBuild + runtime cached, Postgres up, db `app` created |
+| Bootstrap hook | `bash .claude/bootstrap.sh` | ✅ idempotent; download URLs return HTTP 206 for linux-amd64 / linux-arm64 / darwin-arm64 |
+| Local boot | `./mxcli run --local -p App.mpr` | ✅ HTTP **200** at `http://localhost:8080/` in ~19 s |
+| Hub preview | `./mxcli run --hub https://hub.mxcli.org -p App.mpr` | ✅ tunnel up; preview URL 302s to GitHub OAuth (finding 8) |
+| Lint | `./mxcli lint -p App.mpr` | ⚠️ exit 0, but 106 issues of which 102 are un-actionable `System.*` (finding 9) |
+| Runtime log | `grep -icE "error|warn|exception" .mxcli/runtime.log` | ⚠️ 8 lines — all benign or self-inflicted (findings 7a, 7b) |
+
+Committed and pushed to `claude/mendix-app-mxcli-setup-b0o6qv`.
