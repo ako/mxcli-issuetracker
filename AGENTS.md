@@ -1,5 +1,15 @@
 # Mendix Project: mxcli-issuetracker
 
+> **Repo layout (read this first).** Each Mendix app lives in its **own
+> subfolder** — currently `App/App.mpr` — so this repo can hold several apps
+> side by side. Always pass the app folder in `-p`, e.g. `./mxcli -p App/App.mpr`.
+> The `mxcli` binary and the shared tooling (`.claude/`, `.devcontainer/`,
+> `.ai-context/`) stay at the repo root.
+>
+> Note: `mxcli init` regenerates this file assuming a single `.mpr` at the repo
+> root and will reset the `-p` paths below to `-p App.mpr`. If you re-run `init`,
+> re-apply the `App/` prefix. See FINDINGS.md finding 12.
+
 This is a Mendix project configured for AI-assisted development using mxcli and MDL (Mendix Definition Language).
 
 ## Communication Style
@@ -27,7 +37,7 @@ When discussing changes with the user:
 The `mxcli` tool is located in the **root folder of this project**, not in the system PATH. Always use the local path:
 
 ```bash
-./mxcli -p App.mpr    # Correct - uses local binary
+./mxcli -p App/App.mpr    # Correct - uses local binary
 ```
 
 **Do NOT use** `mxcli` directly - it will fail with "command not found". Always prefix with `./` to run the local binary.
@@ -37,14 +47,14 @@ The `mxcli` tool is located in the **root folder of this project**, not in the s
 The `mx` command validates Mendix projects (same checks as Studio Pro). To set it up:
 
 ```bash
-./mxcli setup mxbuild -p App.mpr    # Auto-download for project's Mendix version
+./mxcli setup mxbuild -p App/App.mpr    # Auto-download for project's Mendix version
 ```
 
 After setup, `mx` is at `~/.mxcli/mxbuild/{version}/modeler/mx`. Usage:
 
 ```bash
-~/.mxcli/mxbuild/*/modeler/mx check App.mpr   # Validate project
-./mxcli docker check -p App.mpr               # Alternative (auto-downloads mxbuild)
+~/.mxcli/mxbuild/*/modeler/mx check App/App.mpr   # Validate project
+./mxcli docker check -p App/App.mpr               # Alternative (auto-downloads mxbuild)
 ```
 
 ## Quick Start
@@ -54,23 +64,23 @@ After setup, `mx` is at `~/.mxcli/mxbuild/{version}/modeler/mx`. Usage:
 Use the `-c` flag to run a single MDL command:
 
 ```bash
-./mxcli -p App.mpr -c "SHOW MODULES"              # List all modules
-./mxcli -p App.mpr -c "SHOW STRUCTURE"             # Project overview
-./mxcli -p App.mpr -c "SHOW ENTITIES IN MyModule"  # Entities in a module
-./mxcli -p App.mpr -c "DESCRIBE ENTITY MyModule.Customer"  # Entity details
+./mxcli -p App/App.mpr -c "SHOW MODULES"              # List all modules
+./mxcli -p App/App.mpr -c "SHOW STRUCTURE"             # Project overview
+./mxcli -p App/App.mpr -c "SHOW ENTITIES IN MyModule"  # Entities in a module
+./mxcli -p App/App.mpr -c "DESCRIBE ENTITY MyModule.Customer"  # Entity details
 ```
 
 ### Execute an MDL Script File
 
 ```bash
-./mxcli exec script.mdl -p App.mpr
+./mxcli exec script.mdl -p App/App.mpr
 ```
 
 ### Start Interactive REPL
 
 ```bash
 ./mxcli
-# Then: CONNECT LOCAL 'App.mpr';
+# Then: CONNECT LOCAL 'App/App.mpr';
 ```
 
 ## IMPORTANT: Before Writing MDL Scripts or Working with Data
@@ -96,7 +106,7 @@ Use the `-c` flag to run a single MDL command:
 
 ```bash
 ./mxcli check script.mdl                              # Syntax check
-./mxcli check script.mdl -p App.mpr --references  # With reference validation
+./mxcli check script.mdl -p App/App.mpr --references  # With reference validation
 ```
 
 ## MDL Commands by Domain
@@ -282,7 +292,7 @@ Before executing MDL scripts, validate them for syntax errors:
 Validate that all referenced modules, entities, and associations exist:
 
 ```bash
-./mxcli check script.mdl -p App.mpr --references
+./mxcli check script.mdl -p App/App.mpr --references
 ```
 
 The reference checker is smart - it automatically skips references to objects that are created within the same script.
@@ -293,16 +303,16 @@ Check your project for common issues:
 
 ```bash
 # Lint the project
-./mxcli lint -p App.mpr
+./mxcli lint -p App/App.mpr
 
 # With colored output
-./mxcli lint -p App.mpr --color
+./mxcli lint -p App/App.mpr --color
 
 # List available rules
-./mxcli lint -p App.mpr --list-rules
+./mxcli lint -p App/App.mpr --list-rules
 
 # Output as SARIF
-./mxcli lint -p App.mpr --format sarif > results.sarif
+./mxcli lint -p App/App.mpr --format sarif > results.sarif
 ```
 
 ### Built-in Rules
@@ -361,13 +371,13 @@ Generate a scored best practices report:
 
 ```bash
 # Markdown report (default)
-./mxcli report -p App.mpr
+./mxcli report -p App/App.mpr
 
 # JSON report
-./mxcli report -p App.mpr --format json
+./mxcli report -p App/App.mpr --format json
 
 # HTML report
-./mxcli report -p App.mpr --format html
+./mxcli report -p App/App.mpr --format html
 ```
 
 The report scores 6 categories (Naming, Security, Quality, Architecture, Performance, Design) on a 0-100 scale. See `assess-quality` skill for the full assessment guide.

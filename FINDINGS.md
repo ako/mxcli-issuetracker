@@ -42,53 +42,41 @@ chmod +x ./mxcli
 Note the binary is 88 MB and is listed in the generated `.gitignore`, so it is
 deliberately *not* committed — every fresh clone must re-fetch it.
 
-## 2. `mxcli new` refuses to scaffold into a non-empty directory
+## 2. ~~`mxcli new` refuses to scaffold into a non-empty directory~~ — RETRACTED, my error
 
-**Command:** `./mxcli new App --version 11.6.3 --output-dir .`
-**Error:** `Error: directory /home/user/mxcli-issuetracker already exists and is not empty`
+**Originally filed as an mxcli defect. It is not one.** Keeping the entry so the
+next session does not re-derive the same wrong conclusion.
 
-The repo root was not empty — it already had `.git/`, `LICENSE`, `README.md`
-from the initial commit. This is the normal state of any existing repo you want
-to provision, so it blocks the documented "create the app at the repo root"
-path. There is no `--force`/`--into-existing` flag (`mxcli new --help` lists
-only `--output-dir`, `--skip-init`, `--version`). `mxcli init` was not an option
-either — it needs an `.mpr` that does not exist yet.
+What happened: I read "create the app at the repo root" as "the app's *contents*
+sit directly in the repo root", forced `--output-dir .`, and got
 
-**Workaround applied:** scaffold into an empty temp dir, then move the contents
-into the repo root:
-
-```bash
-./mxcli new App --version 11.6.3 --output-dir /home/user/mxcli-new-tmp
-# move everything except the linked ./mxcli binary into the repo root
+```
+Error: directory /home/user/mxcli-issuetracker already exists and is not empty
 ```
 
-**Verified:** no filename collisions with the pre-existing `LICENSE` /
-`README.md` / `.git`, and `App.mpr` + `mprcontents/` landed intact
-(`./mxcli -p App.mpr` reads the project fine — see finding 6).
+I then built a temp-dir-and-move workaround around it. **The guard is correct**
+— it stops you clobbering an existing project — and it was never in the way:
+`mxcli new App --version 11.6.3` with **no** `--output-dir`, run from the repo
+root, creates `./App/` and exits cleanly. That is also the layout you want,
+because a repo may hold several apps side by side and each needs its own folder.
 
-**Suggested fix for mxcli:** allow scaffolding into a non-empty directory when
-no `.mpr` is present, or at least ignore `.git`, `LICENSE`, `README*` and
-similar when deciding "not empty". Provisioning an existing repo is a common
-case.
+**Corrected layout** (see finding 12): the Mendix app lives in `App/`, shared
+tooling stays at the repo root. No workaround, no `sed` fixes, no temp dir.
 
-## 3. Project name is derived from the output directory's basename
+**Lesson for the next session:** if an mxcli command refuses something, check
+whether the *default* behaviour already does what you want before working around
+the guard.
 
-Because of the finding-2 workaround, the scaffolder stamped the *temp* directory
-name into three generated files:
+## 3. ~~Project name is derived from the output directory's basename~~ — VOID
 
-- `CLAUDE.md:1` — `# Mendix Project: mxcli-new-tmp`
-- `AGENTS.md:1` — same heading
-- `.devcontainer/devcontainer.json:2` — `"name": "mxcli-new-tmp"`
+This only existed because of the finding-2 temp dir: `CLAUDE.md`, `AGENTS.md`
+and `.devcontainer/devcontainer.json` were stamped with `mxcli-new-tmp`. With the
+correct `mxcli new App` invocation the basename is `App` and the name is right,
+so there is nothing here to report.
 
-All cosmetic (nothing functional referenced the temp path — checked with
-`grep -rl mxcli-new-tmp .`, which matched only those three files). Corrected to
-`mxcli-issuetracker`; re-running `./mxcli init --tool claude` in the final
-directory also regenerates `AGENTS.md`/`CLAUDE.md` with the right name, so the
-`init` re-run is a clean way to repair this.
-
-Worth knowing: the app name passed to `mxcli new` (`App`, which determines
-`App.mpr`) and the display name in the docs/devcontainer are derived from
-*different* sources — the argument vs. the directory basename.
+Still true and worth knowing: the app name argument (which determines
+`App.mpr`) and the display name in the generated docs/devcontainer come from
+**different** sources — the argument vs. the output directory's basename.
 
 ## 4. The SessionStart self-bootstrap hook is a no-op on a fresh clone
 
@@ -321,6 +309,65 @@ the next session starts from a clean tree.
 generates (or run one throwaway build as part of `new`) so a freshly scaffolded
 project is already build-stable.
 
+## 12. Multi-app layout: mxcli's generated tooling assumes a single app at the repo root
+
+The repo is laid out for **one folder per app**, which is what `mxcli new <Name>`
+produces by default and what a multi-app solution needs:
+
+```
+mxcli-issuetracker/
+├── App/                 # the Mendix app: App.mpr, mprcontents/, javasource/, ...
+│   └── App.mpr
+├── .claude/             # shared: SessionStart hook, commands, lint rules
+├── .devcontainer/       # shared
+├── .ai-context/         # shared MDL skill docs
+├── AGENTS.md CLAUDE.md  # shared agent entry docs
+├── FINDINGS.md
+└── mxcli                # shared binary (gitignored)
+```
+
+Three things had to be adjusted, because `mxcli init` generates tooling on the
+assumption that exactly one `.mpr` sits directly in the repo root:
+
+**a) `.gitignore` was root-anchored and silently stopped working.** mxcli emits
+`/deployment/`, `/javasource/system/`, `/javasource/*/proxies/`,
+`/mprcontents/mprjournal*`, `/.classpath`, `/*.launch`, etc. — all with a leading
+`/`, so they only match at the repo root. Once the app moved to `App/`, **none of
+those matched any more** and build artifacts inside `App/` would have been
+committed. De-anchored them (dropped the leading `/`) so they match at any depth;
+kept `/mxcli` anchored, since that one genuinely is a root-only file.
+This is the sharpest of the three: it fails *silently* and in the direction of
+committing junk.
+
+**b) The SessionStart hook hardcoded `-p App.mpr`.** Rewrote
+`.claude/bootstrap.sh` to discover apps (`for mpr in */*.mpr *.mpr`) and warm each
+one, so adding a second app needs no edit to the hook. Each app gets its own
+database, since mxcli derives the db name from the project name.
+
+**c) `CLAUDE.md` / `AGENTS.md` hardcode `-p App.mpr` in 19 places each.**
+Rewritten to `-p App/App.mpr`, plus a layout note at the top of each. **These two
+files are regenerated by `mxcli init`, which will reset the paths back to
+`-p App.mpr`** — the note says so, so a future session re-running `init` knows to
+re-apply the prefix.
+
+**Where the shared tooling lives, and why not inside `App/`:** Claude Code reads
+project settings from `.claude/settings.json` at the session's working directory —
+the repo root. A hook at `App/.claude/settings.json` would not fire, which would
+defeat the whole self-bootstrap goal. Keeping `.claude/` at the root works
+regardless, and is also the right home for it once there are several apps: one
+hook warms them all.
+
+**Suggested fixes for mxcli:**
+- Emit `.gitignore` patterns un-anchored (or anchored to the app folder) so they
+  survive the app not being at the repo root.
+- Have `init` detect existing `.mpr` files anywhere in the tree and generate a
+  hook that iterates them, rather than hardcoding one root-level path.
+- Support a repo with N apps as a first-class layout: `init` at the root for
+  shared tooling, `new <Name>` per app.
+
+**Verified:** `bash .claude/bootstrap.sh` discovers and warms `App/App.mpr`, and
+`./mxcli run --local -p App/App.mpr` boots to HTTP 200 (see the summary table).
+
 ---
 
 ## Verification summary
@@ -328,14 +375,15 @@ project is already build-stable.
 | Step | Command | Result |
 | --- | --- | --- |
 | mxcli available | `./mxcli --version` | ✅ `nightly-20260805-4fda072f` (downloaded; not pre-installed — finding 1) |
-| App created | `mxcli new App --version 11.6.3` | ✅ via temp-dir workaround (finding 2) |
+| App created | `mxcli new App --version 11.6.3` | ✅ at `App/App.mpr` — one folder per app (findings 2, 12) |
 | Claude tooling | `./mxcli init --tool claude` | ✅ hook + commands + lint rules present |
-| Prereqs up | `./mxcli run --local --setup --ensure-db -p App.mpr` | ✅ MxBuild + runtime cached, Postgres up, db `app` created |
-| Bootstrap hook | `bash .claude/bootstrap.sh` | ✅ idempotent; download URLs return HTTP 206 for linux-amd64 / linux-arm64 / darwin-arm64 |
-| Local boot | `./mxcli run --local -p App.mpr` | ✅ HTTP **200** at `http://localhost:8080/` in ~19 s |
-| Hub preview | `./mxcli run --hub https://hub.mxcli.org -p App.mpr` | ✅ tunnel up; preview URL 302s to GitHub OAuth (finding 8) |
-| Lint | `./mxcli lint -p App.mpr` | ⚠️ exit 0, but 106 issues of which 102 are un-actionable `System.*` (finding 9) |
+| Prereqs up | `./mxcli run --local --setup --ensure-db -p App/App.mpr` | ✅ MxBuild + runtime cached, Postgres up, db `app` created |
+| Bootstrap hook | `bash .claude/bootstrap.sh` | ✅ idempotent; discovers `App/App.mpr` via `*/*.mpr`; download URLs return HTTP 206 for linux-amd64 / linux-arm64 / darwin-arm64 |
+| Local boot | `./mxcli run --local -p App/App.mpr` | ✅ HTTP **200** at `http://localhost:8080/` (~19 s root layout, ~38 s re-verified after the move) |
+| Hub preview | `./mxcli run --hub https://hub.mxcli.org -p App.mpr` | ✅ tunnel up; preview URL 302s to GitHub OAuth (finding 8) — verified pre-move |
+| Lint | `./mxcli lint -p App.mpr` (pre-move) | ⚠️ exit 0, but 106 issues of which 102 are un-actionable `System.*` (finding 9) |
 | Runtime log | `grep -icE "error|warn|exception" .mxcli/runtime.log` | ⚠️ 8 lines — all benign or self-inflicted (findings 7a, 7b) |
 | Build stability | `git status --porcelain` after 2 builds | ✅ clean — but the *first* build rewrote 51 scaffolded files (finding 11) |
+| Ignore rules under `App/` | `git check-ignore` on 6 generated artifacts | ✅ all ignored after de-anchoring `.gitignore` (finding 12a) |
 
 Committed and pushed to `claude/mendix-app-mxcli-setup-b0o6qv`.

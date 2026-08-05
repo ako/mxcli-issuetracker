@@ -1,7 +1,13 @@
 #!/usr/bin/env bash
-# SessionStart bootstrap: make sure ./mxcli exists, then warm the dev loop.
+# SessionStart bootstrap: make sure ./mxcli exists, then warm the dev loop for
+# every Mendix app in this repo.
 #
-# The mxcli binary is gitignored (88 MB), so a fresh clone has no binary and the
+# Layout: each app lives in its own subfolder (App/App.mpr, and any siblings),
+# which is what `mxcli new <Name>` produces when run from the repo root. This
+# script discovers them rather than hardcoding one path, so adding a second app
+# needs no edit here.
+#
+# The mxcli binary is gitignored (84 MB), so a fresh clone has no binary and the
 # stock hook's `test -x ./mxcli` guard would silently no-op. This script fetches
 # it first. See FINDINGS.md finding 4.
 #
@@ -34,6 +40,14 @@ if [ ! -x ./mxcli ]; then
   chmod +x ./mxcli.tmp && mv ./mxcli.tmp ./mxcli
 fi
 
-# Warm caches (MxBuild + runtime), start Postgres, create the app database.
+# Warm caches (MxBuild + runtime), start Postgres, create each app's database.
 # Non-fatal: a session should still start if this fails.
-./mxcli run --local --setup --ensure-db -p App.mpr || true
+shopt -s nullglob
+found=0
+for mpr in */*.mpr *.mpr; do
+  case "$mpr" in *.mpr.bak|*.mpr.lock) continue ;; esac
+  found=1
+  echo "bootstrap: warming $mpr"
+  ./mxcli run --local --setup --ensure-db -p "$mpr" || true
+done
+[ "$found" = 1 ] || echo "bootstrap: no .mpr found, nothing to warm" >&2
