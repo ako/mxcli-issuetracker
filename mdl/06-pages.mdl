@@ -15,6 +15,10 @@
 --     col-prefixed widget name, never `column Status (...)`.
 --   * A container must never be empty and dynamictext content must never be '',
 --     or the page compiles but crashes at runtime.
+--   * Never feed a nullable DateTime straight into `<` / `>` in a dynamic-class
+--     expression. Empty rows raise "Operator < not supported" client-side and
+--     take the whole grid down. Guard with a nested `if … = empty` first — see
+--     FINDINGS finding 26.
 -- =============================================================================
 
 -- -----------------------------------------------------------------------------
@@ -253,7 +257,7 @@ create or replace page IssueTracker.Issue_Overview
         column colDueO (
           attribute: DueDate, caption: 'Due',
           ColumnWidth: manual, Size: 120,
-          DynamicCellClass: 'if $currentObject/DueDate < [%CurrentDateTime%] then ''it-cell-overdue'' else '''''
+          DynamicCellClass: 'if $currentObject/DueDate = empty then '''' else if $currentObject/DueDate < [%CurrentDateTime%] then ''it-cell-overdue'' else '''''
         )
         column colEscO (attribute: IsEscalated, caption: 'Esc', ColumnWidth: manual, Size: 70, Alignment: center)
         column colReopenO (attribute: ReopenCount, caption: 'Re', ColumnWidth: manual, Size: 60, Alignment: right)

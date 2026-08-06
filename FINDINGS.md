@@ -792,6 +792,66 @@ errors in either pass.
 proves nothing about the dark case. `colorScheme: 'dark'` is one Playwright option
 and it would have caught this before the user did.
 
+## 26. A nullable DateTime in a dynamic-class expression takes the whole grid down
+
+**Reported by the user as "the app stopped".** It had not — the server was serving
+HTTP 200 the whole time. The *Issues board* was throwing a client-side error, which
+Mendix surfaces as a dead-looking page.
+
+The runtime log had it exactly:
+
+```
+ERROR - Client: An error occurred while evaluating value of
+IssueTracker.Issue_Overview.dgIssues:
+Operator < not supported in expression <(, Thu Aug 06 2026 05:29:49 …)
+```
+
+The culprit was my own `DynamicCellClass` on the Due column:
+
+```mdl
+DynamicCellClass: 'if $currentObject/DueDate < [%CurrentDateTime%] then ''it-cell-overdue'' else '''''
+```
+
+`DueDate` is nullable, and 6 of the 12 seeded issues have none. Feeding empty into
+`<` raises "Operator < not supported" — note the rendered expression `<(, <date>)`
+with an empty left operand — and it fires per row, so the grid never renders.
+
+**Fixed with a nested guard rather than `and`,** so the comparison is unreachable
+when the value is empty and nothing depends on short-circuit evaluation:
+
+```mdl
+DynamicCellClass: 'if $currentObject/DueDate = empty then '''' else if $currentObject/DueDate < [%CurrentDateTime%] then ''it-cell-overdue'' else '''''
+```
+
+The other four dynamic-class expressions compare **enumerations**, which are never
+empty, so they were never at risk.
+
+**Why my verification missed it.** The earlier driver only reliably reached the
+dashboard — its Issues-link click silently did nothing, and I read the absence of a
+`board rows:` line as noise instead of as a page never visited. Neither `mxcli
+check` nor `mx check` can catch this: the expression is valid MDL and a valid
+Mendix expression; it only fails on data.
+
+**Verification now covers it**, and this is the shape worth keeping:
+
+* navigate by **URL** to every page (`/p/dashboard`, `/p/issues`, `/p/projects`,
+  `/p/labels`, `/p/workflows`, plus detail via the board), never by clicking links
+  that may silently fail
+* assert per page: grid rows rendered, **0** `pageerror`/console errors, **0**
+  error dialogs in the DOM
+* diff the **runtime log** against a line-count baseline taken before boot and
+  fail on any new `ERROR - Client:` line — the server-side record of client
+  failures, which is what actually found this
+* run it all under `colorScheme: 'dark'` so finding 25 cannot regress
+
+Result after the fix: `dashboard 14 rows · issues 13 · projects 4 · labels 7 ·
+workflows 8 · detail ok` — all with 0 JS errors, 0 alerts, and **0 new
+`ERROR - Client` lines** in the runtime log.
+
+**Lesson:** "the app renders" is not the same as "every page renders", and demo
+data with nulls in it is what exposes the difference. Seed nullable fields as
+empty on purpose — 6 of these 12 issues having no due date is what caught this.
+
 ---
 
 ## Issue Tracker build — what shipped
