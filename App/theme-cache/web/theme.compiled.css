@@ -29732,29 +29732,6 @@ Do not change this file because it is core styling. Customizing core files will 
   --it-gap: 16px;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --it-surface: #191c20;
-    --it-surface-sunken: #12151a;
-    --it-border: #2b3037;
-    --it-border-strong: #3a4048;
-    --it-ink: #e8eaed;
-    --it-ink-muted: #a3abb6;
-    --it-ink-faint: #78808b;
-    --it-critical-bg: #3a1a1c;
-    --it-critical-ink: #ff9ea1;
-    --it-high-bg: #3a2717;
-    --it-high-ink: #ffbe7d;
-    --it-warn-bg: #332a10;
-    --it-warn-ink: #f0cf72;
-    --it-ok-bg: #16301f;
-    --it-ok-ink: #86dba6;
-    --it-info-bg: #1a2540;
-    --it-info-ink: #9dbcff;
-    --it-neutral-bg: #23272d;
-    --it-neutral-ink: #b4bcc7;
-  }
-}
 .it-page {
   padding: 20px 24px 32px;
   background: var(--it-surface-sunken);

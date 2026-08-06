@@ -34,24 +34,22 @@
   --it-gap:    16px;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --it-surface:        #191c20;
-    --it-surface-sunken: #12151a;
-    --it-border:         #2b3037;
-    --it-border-strong:  #3a4048;
-    --it-ink:            #e8eaed;
-    --it-ink-muted:      #a3abb6;
-    --it-ink-faint:      #78808b;
-
-    --it-critical-bg: #3a1a1c;  --it-critical-ink: #ff9ea1;
-    --it-high-bg:     #3a2717;  --it-high-ink:     #ffbe7d;
-    --it-warn-bg:     #332a10;  --it-warn-ink:     #f0cf72;
-    --it-ok-bg:       #16301f;  --it-ok-ink:       #86dba6;
-    --it-info-bg:     #1a2540;  --it-info-ink:     #9dbcff;
-    --it-neutral-bg:  #23272d;  --it-neutral-ink:  #b4bcc7;
-  }
-}
+// This app is deliberately LIGHT-ONLY. There is no `prefers-color-scheme: dark`
+// block here, and adding one is a trap:
+//
+//   * Atlas's own dark theme is opt-in through a **class** — `_theme-dark.scss`
+//     is scoped to `:root.theme-dark` — not through `prefers-color-scheme`. A
+//     media query repaints only this file's surfaces.
+//   * Atlas widgets and the pluggable DataGrid2 ship light-only surfaces. With a
+//     media query in place, an OS set to dark produced dark KPI tiles and card
+//     headers around **white grid rows with pale text** — unreadable.
+//
+// A half-dark result is worse than a consistent light one, so the dark token set
+// was removed rather than half-applied. Going dark properly means committing to
+// it: add `theme-dark` to the root element and override every Atlas widget
+// surface unconditionally (rows, headers, paging, inputs, comboboxes, and the
+// popovers/modals that render at `<body>` outside any app-scoped class).
+// See `.ai-context/skills/atlas-design.md` → "Dark mode — commit to one theme".
 
 // ---------------------------------------------------------------------------
 // Page shell

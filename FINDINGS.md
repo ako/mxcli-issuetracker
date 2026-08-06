@@ -752,6 +752,46 @@ Not everything fought back. These all built with 0 errors on the first attempt:
 | Build stability | `git status --porcelain` after 2 builds | ✅ clean — but the *first* build rewrote 51 scaffolded files (finding 11) |
 | Ignore rules under `App/` | `git check-ignore` on 6 generated artifacts | ✅ all ignored after de-anchoring `.gitignore` (finding 12a) |
 
+## 25. Half-dark theming: my own bug, and why Atlas makes it easy to hit
+
+**Reported by the user from a real browser**, not caught by any check: with the OS
+in dark mode the app rendered dark KPI tiles and card headers around **white grid
+rows with pale, near-unreadable text**.
+
+Cause was mine. `_issuetracker.scss` carried a `@media (prefers-color-scheme: dark)`
+block that repainted the `it-` tokens. Two things make that wrong in Atlas:
+
+* **Atlas's dark theme is opt-in by class, not by media query.** The generated
+  `theme/web/_theme-dark.scss` is scoped to `:root.theme-dark`. Nothing in Atlas
+  listens to `prefers-color-scheme`, so the media query moved *only* my surfaces
+  and left every Atlas widget in light mode.
+* **Atlas widgets and the pluggable DataGrid2 ship light-only surfaces.** Grid rows
+  stay white however dark the page shell gets.
+
+`.ai-context/skills/atlas-design.md` warns about exactly this — *"A half-dark
+result (your chrome dark, Atlas widgets light) is worse than a consistent light
+app"* — and I wrote the media query anyway.
+
+**Fixed by committing to light-only:** the dark token block is gone, replaced by a
+comment explaining what going dark would actually require (root class + every
+Atlas widget surface overridden unconditionally, including popovers and modals
+which render at `<body>` outside any app-scoped class).
+
+**Verified** by driving the app twice in headless Chromium with
+`newContext({ colorScheme })` and reading computed styles:
+
+| `colorScheme` | page bg | card bg | text | row-text contrast |
+| --- | --- | --- | --- | --- |
+| `dark` | `rgb(245,246,248)` | `rgb(255,255,255)` | `rgb(28,32,36)` | **16.39:1** |
+| `light` | `rgb(245,246,248)` | `rgb(255,255,255)` | `rgb(28,32,36)` | **16.39:1** |
+
+Identical in both, and far above WCAG AA's 4.5:1 for body text. No JS console
+errors in either pass.
+
+**Lesson worth carrying:** a screenshot taken in the default (light) color scheme
+proves nothing about the dark case. `colorScheme: 'dark'` is one Playwright option
+and it would have caught this before the user did.
+
 ---
 
 ## Issue Tracker build — what shipped
