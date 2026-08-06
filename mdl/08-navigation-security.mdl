@@ -1,0 +1,167 @@
+-- =============================================================================
+-- Issue Tracker — Phase 8: navigation and security
+--
+-- Module roles are mapped onto the two user roles the blank app ships with
+-- (Administrator, User). Access rules are declared even though the project's
+-- security level is left as generated, so the model is complete and
+-- `mxcli lint`'s SEC001 has nothing to flag on this module's entities.
+-- =============================================================================
+
+-- -----------------------------------------------------------------------------
+-- Module roles
+-- -----------------------------------------------------------------------------
+
+-- `create module role` has no OR REPLACE form, so drop first to keep this file
+-- replayable. DROP on a missing role is tolerated by exec's error handling only
+-- if it exists, so these two lines are the one part of this script that assumes
+-- a fresh module; on a replay into an existing project, comment them out.
+drop module role IssueTracker.Administrator;
+/
+
+drop module role IssueTracker.Reporter;
+/
+
+create module role IssueTracker.Administrator description 'Full access: reference data, all issues, workflow monitor.';
+/
+
+create module role IssueTracker.Reporter description 'Files and comments on issues, reads the board.';
+/
+
+-- -----------------------------------------------------------------------------
+-- Entity access
+-- -----------------------------------------------------------------------------
+
+-- Entity access rules are declared for DashboardStats only.
+--
+-- mxcli's GRANT validator rejects two kinds of member that Mendix nonetheless
+-- requires every access rule to cover, so a *complete* rule cannot be written in
+-- MDL for most of this module — and a partial rule fails the build with CE0066
+-- "Entity access is out of date":
+--
+--   * the system members created by `autocreateddate` / `autochangeddate`
+--     ("entity IssueTracker.Issue has no member(s) changedDate, createdDate")
+--     — this rules out Issue, Comment and Project
+--   * the non-owning side of an `owner both` reference set
+--     ("entity IssueTracker.Label has no member(s) Issue_Label") — Label
+--
+-- Granting nothing on those entities builds cleanly, so they are left for Studio
+-- Pro's "Update security" button. Page and microflow access below is unaffected.
+-- See FINDINGS finding 20.
+
+grant IssueTracker.Administrator on IssueTracker.DashboardStats (create, delete, read *, write *);
+/
+grant IssueTracker.Reporter on IssueTracker.DashboardStats (create, read *, write *);
+/
+
+-- -----------------------------------------------------------------------------
+-- Page access
+-- -----------------------------------------------------------------------------
+
+grant view on page IssueTracker.Dashboard to IssueTracker.Administrator, IssueTracker.Reporter;
+/
+grant view on page IssueTracker.Issue_Overview to IssueTracker.Administrator, IssueTracker.Reporter;
+/
+grant view on page IssueTracker.Issue_Detail to IssueTracker.Administrator, IssueTracker.Reporter;
+/
+grant view on page IssueTracker.Issue_NewEdit to IssueTracker.Administrator, IssueTracker.Reporter;
+/
+grant view on page IssueTracker.Comment_New to IssueTracker.Administrator, IssueTracker.Reporter;
+/
+grant view on page IssueTracker.WF_TriageTask to IssueTracker.Administrator, IssueTracker.Reporter;
+/
+grant view on page IssueTracker.WF_WorkTask to IssueTracker.Administrator, IssueTracker.Reporter;
+/
+grant view on page IssueTracker.WF_VerifyTask to IssueTracker.Administrator, IssueTracker.Reporter;
+/
+grant view on page IssueTracker.WF_Overview to IssueTracker.Administrator;
+/
+grant view on page IssueTracker.Project_Overview to IssueTracker.Administrator;
+/
+grant view on page IssueTracker.Project_NewEdit to IssueTracker.Administrator;
+/
+grant view on page IssueTracker.Label_Overview to IssueTracker.Administrator;
+/
+grant view on page IssueTracker.Label_NewEdit to IssueTracker.Administrator;
+/
+
+-- -----------------------------------------------------------------------------
+-- Microflow access
+-- -----------------------------------------------------------------------------
+
+grant execute on microflow IssueTracker.DS_DashboardStats to IssueTracker.Administrator, IssueTracker.Reporter;
+/
+grant execute on microflow IssueTracker.DS_MyOpenIssues to IssueTracker.Administrator, IssueTracker.Reporter;
+/
+grant execute on microflow IssueTracker.SUB_CurrentUserName to IssueTracker.Administrator, IssueTracker.Reporter;
+/
+grant execute on microflow IssueTracker.SUB_Issue_FromTask to IssueTracker.Administrator, IssueTracker.Reporter;
+/
+grant execute on microflow IssueTracker.ACT_Issue_New to IssueTracker.Administrator, IssueTracker.Reporter;
+/
+grant execute on microflow IssueTracker.ACT_Issue_Save to IssueTracker.Administrator, IssueTracker.Reporter;
+/
+grant execute on microflow IssueTracker.ACT_Issue_StartWorkflow to IssueTracker.Administrator, IssueTracker.Reporter;
+/
+grant execute on microflow IssueTracker.ACT_Issue_ClaimForMe to IssueTracker.Administrator, IssueTracker.Reporter;
+/
+grant execute on microflow IssueTracker.ACT_Comment_New to IssueTracker.Administrator, IssueTracker.Reporter;
+/
+grant execute on microflow IssueTracker.ACT_Task_TriageAccept to IssueTracker.Administrator, IssueTracker.Reporter;
+/
+grant execute on microflow IssueTracker.ACT_Task_TriageReject to IssueTracker.Administrator, IssueTracker.Reporter;
+/
+grant execute on microflow IssueTracker.ACT_Task_WorkResolve to IssueTracker.Administrator, IssueTracker.Reporter;
+/
+grant execute on microflow IssueTracker.ACT_Task_WorkBlock to IssueTracker.Administrator, IssueTracker.Reporter;
+/
+grant execute on microflow IssueTracker.ACT_Task_VerifyClose to IssueTracker.Administrator, IssueTracker.Reporter;
+/
+grant execute on microflow IssueTracker.ACT_Task_VerifyReopen to IssueTracker.Administrator, IssueTracker.Reporter;
+/
+grant execute on microflow IssueTracker.SUB_Issue_SetTriaged to IssueTracker.Administrator, IssueTracker.Reporter;
+/
+grant execute on microflow IssueTracker.SUB_Issue_SetRejected to IssueTracker.Administrator, IssueTracker.Reporter;
+/
+grant execute on microflow IssueTracker.SUB_Issue_SetClosed to IssueTracker.Administrator, IssueTracker.Reporter;
+/
+grant execute on microflow IssueTracker.SUB_Issue_Escalate to IssueTracker.Administrator, IssueTracker.Reporter;
+/
+grant execute on microflow IssueTracker.VAL_Issue_BeforeCommit to IssueTracker.Administrator, IssueTracker.Reporter;
+/
+grant execute on microflow IssueTracker.ACT_DemoData_Seed to IssueTracker.Administrator;
+/
+
+-- -----------------------------------------------------------------------------
+-- Map module roles onto the app's user roles
+-- -----------------------------------------------------------------------------
+
+alter user role Administrator add module roles (IssueTracker.Administrator);
+/
+
+alter user role User add module roles (IssueTracker.Reporter);
+/
+
+-- -----------------------------------------------------------------------------
+-- Navigation
+-- -----------------------------------------------------------------------------
+
+create or replace navigation Responsive
+  home page IssueTracker.Dashboard
+  menu (
+    menu item 'Dashboard' page IssueTracker.Dashboard;
+    menu item 'Issues' page IssueTracker.Issue_Overview;
+    menu 'Reference data' (
+      menu item 'Projects' page IssueTracker.Project_Overview;
+      menu item 'Labels' page IssueTracker.Label_Overview;
+    );
+    menu item 'Workflow monitor' page IssueTracker.WF_Overview;
+  );
+/
+
+-- -----------------------------------------------------------------------------
+-- Bind the before-commit validation to the Issue entity
+-- -----------------------------------------------------------------------------
+
+alter entity IssueTracker.Issue
+  add event handler on before commit call IssueTracker.VAL_Issue_BeforeCommit($currentObject) raise error;
+/

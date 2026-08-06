@@ -1,0 +1,93 @@
+-- =============================================================================
+-- Issue Tracker — Phase 2: page stubs
+--
+-- MDL executes statement by statement and resolves references immediately, so a
+-- microflow cannot SHOW PAGE a page that does not exist yet, and a workflow
+-- cannot bind a task page that does not exist yet. These minimal stubs give
+-- those references something to bind to; phase 6 fills them in with
+-- CREATE OR MODIFY, which preserves each page's ID so the bindings survive.
+--
+-- Never fill these in with CREATE OR REPLACE — that mints a new ID and every
+-- microflow/workflow binding becomes dangling.
+-- =============================================================================
+
+create or replace page IssueTracker.Issue_NewEdit
+(
+  params: { $Issue: IssueTracker.Issue },
+  title: 'Issue',
+  layout: Atlas_Core.PopupLayout,
+  folder: 'Issues'
+)
+{
+  dataview dvStub (datasource: $Issue) {
+    dynamictext txtStub (Attribute: Title)
+  }
+}
+/
+
+create or replace page IssueTracker.Comment_New
+(
+  params: { $Comment: IssueTracker.Comment },
+  title: 'Add comment',
+  layout: Atlas_Core.PopupLayout,
+  folder: 'Issues'
+)
+{
+  dataview dvStub (datasource: $Comment) {
+    dynamictext txtStub (Attribute: Body)
+  }
+}
+/
+
+create or replace page IssueTracker.WF_TriageTask
+(
+  params: { $Task: System.WorkflowUserTask },
+  title: 'Triage issue',
+  layout: Atlas_Core.Atlas_Default,
+  folder: 'Workflow'
+)
+{
+  dataview dvStub (datasource: $Task) {
+    dynamictext txtStub (Attribute: Name)
+  }
+}
+/
+
+create or replace page IssueTracker.WF_WorkTask
+(
+  params: { $Task: System.WorkflowUserTask },
+  title: 'Work on issue',
+  layout: Atlas_Core.Atlas_Default,
+  folder: 'Workflow'
+)
+{
+  dataview dvStub (datasource: $Task) {
+    dynamictext txtStub (Attribute: Name)
+  }
+}
+/
+
+create or replace page IssueTracker.WF_VerifyTask
+(
+  params: { $Task: System.WorkflowUserTask },
+  title: 'Verify fix',
+  layout: Atlas_Core.Atlas_Default,
+  folder: 'Workflow'
+)
+{
+  dataview dvStub (datasource: $Task) {
+    dynamictext txtStub (Attribute: Name)
+  }
+}
+/
+
+create or replace page IssueTracker.WF_Overview
+(
+  title: 'Workflow monitor',
+  layout: Atlas_Core.Atlas_Default,
+  folder: 'Workflow'
+)
+{
+  dynamictext txtStub (content: 'Workflow monitor', rendermode: H2)
+}
+/

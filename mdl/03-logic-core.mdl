@@ -1,0 +1,304 @@
+-- =============================================================================
+-- Issue Tracker — Phase 3: core logic
+-- Datasource microflows, task-outcome handlers, workflow-step helpers,
+-- validation and demo data. Nothing here references the workflow document, so
+-- this runs before phase 4 creates it.
+-- =============================================================================
+
+/**
+ * Builds the KPI tile row on the dashboard.
+ *
+ * NOTE: `[%CurrentDateTime%]` is written pre-quoted on purpose. mxcli quotes a
+ * token correctly when it is the only condition in a constraint, but drops the
+ * quotes as soon as it is combined with `and`, producing CE0161. Writing the
+ * quotes here passes them through verbatim. See FINDINGS finding 18.
+ *
+ * Returns a non-persistent DashboardStats — one object, never committed. Each
+ * counter is its own retrieve so the numbers stay readable; on a real dataset
+ * these would move to OQL/view entities.
+ *
+ * @returns A populated, uncommitted DashboardStats object
+ */
+create or replace microflow IssueTracker.DS_DashboardStats ()
+returns IssueTracker.DashboardStats as $Stats
+folder 'Datasources'
+begin
+  retrieve $Open from IssueTracker.Issue
+    where Status != IssueTracker.IssueStatus.Closed
+      and Status != IssueTracker.IssueStatus.Rejected;
+  $TotalOpen = count($Open);
+
+  retrieve $Critical from IssueTracker.Issue
+    where Priority = IssueTracker.IssuePriority.Critical
+      and Status != IssueTracker.IssueStatus.Closed
+      and Status != IssueTracker.IssueStatus.Rejected;
+  $CriticalOpen = count($Critical);
+
+  retrieve $Working from IssueTracker.Issue
+    where Status = IssueTracker.IssueStatus.InProgress;
+  $InProgress = count($Working);
+
+  retrieve $NoOwner from IssueTracker.Issue
+    where not(IssueTracker.Issue_Assignee/System.User)
+      and Status != IssueTracker.IssueStatus.Closed
+      and Status != IssueTracker.IssueStatus.Rejected;
+  $Unassigned = count($NoOwner);
+
+  retrieve $Late from IssueTracker.Issue
+    where DueDate < '[%CurrentDateTime%]'
+      and Status != IssueTracker.IssueStatus.Closed
+      and Status != IssueTracker.IssueStatus.Rejected;
+  $Overdue = count($Late);
+
+  retrieve $Recent from IssueTracker.Issue
+    where Status = IssueTracker.IssueStatus.Resolved;
+  $ResolvedRecent = count($Recent);
+
+  retrieve $Done from IssueTracker.Issue
+    where Status = IssueTracker.IssueStatus.Closed;
+  $ClosedTotal = count($Done);
+
+  retrieve $Bounced from IssueTracker.Issue
+    where ReopenCount > 0;
+  $ReopenedTotal = count($Bounced);
+
+  $Stats = create IssueTracker.DashboardStats (
+    TotalOpen = $TotalOpen,
+    CriticalOpen = $CriticalOpen,
+    InProgress = $InProgress,
+    Unassigned = $Unassigned,
+    Overdue = $Overdue,
+    AwaitingVerification = $ResolvedRecent,
+    ClosedTotal = $ClosedTotal,
+    ReopenedTotal = $ReopenedTotal);
+
+  return $Stats;
+end;
+/
+
+/**
+ * The signed-in user's open work queue, most urgent first.
+ *
+ * @returns Issues assigned to the current user that are not closed or rejected
+ */
+create or replace microflow IssueTracker.DS_MyOpenIssues ()
+returns list of IssueTracker.Issue as $MyIssues
+folder 'Datasources'
+begin
+  retrieve $MyIssues from IssueTracker.Issue
+    where IssueTracker.Issue_Assignee = '[%CurrentUser%]'
+      and Status != IssueTracker.IssueStatus.Closed
+      and Status != IssueTracker.IssueStatus.Rejected
+    sort by IssueTracker.Issue.Priority asc, IssueTracker.Issue.DueDate asc;
+  return $MyIssues;
+end;
+/
+
+-- -----------------------------------------------------------------------------
+-- Helpers
+-- -----------------------------------------------------------------------------
+
+/**
+ * Display name of the signed-in user.
+ *
+ * Looked up by id token rather than navigating `[%CurrentUser%]`, so the result
+ * can be copied into the denormalised *Name attributes that grids bind to.
+ *
+ * @returns The current user's Name, or '' if it cannot be resolved
+ */
+create or replace microflow IssueTracker.SUB_CurrentUserName ()
+returns string as $Name
+folder 'Helpers'
+begin
+  declare $Name string = '';
+  retrieve $Me from System.User where id = '[%CurrentUser%]' limit 1;
+  if $Me != empty then
+    set $Name = $Me/Name;
+  end if;
+  return $Name;
+end;
+/
+
+/**
+ * Resolves the Issue a workflow user task belongs to.
+ *
+ * The workflow's context object is not reachable as a modelled association, so
+ * the Issue carries an explicit Issue_Workflow reference set when the workflow
+ * is started. Navigating it in reverse yields a one-element list.
+ *
+ * @param $Task The user task being acted on
+ * @returns The Issue under handling, or empty if the link is missing
+ */
+create or replace microflow IssueTracker.SUB_Issue_FromTask ($Task: System.WorkflowUserTask)
+returns IssueTracker.Issue as $Issue
+folder 'Workflow'
+begin
+  retrieve $Wf from $Task/System.WorkflowUserTask_Workflow;
+  retrieve $Issues from $Wf/IssueTracker.Issue_Workflow;
+  $Issue = head($Issues);
+  return $Issue;
+end;
+/
+
+-- -----------------------------------------------------------------------------
+-- Issue lifecycle
+-- -----------------------------------------------------------------------------
+
+/**
+ * Creates a blank issue, stamps the reporter, and opens the edit form.
+ *
+ * @returns true once the form has been opened
+ */
+create or replace microflow IssueTracker.ACT_Issue_New ()
+returns boolean as $ok
+folder 'Issue'
+begin
+  $who = call microflow IssueTracker.SUB_CurrentUserName ();
+  $Issue = create IssueTracker.Issue (
+    Status = IssueTracker.IssueStatus.Reported,
+    Priority = IssueTracker.IssuePriority.Medium,
+    Kind = IssueTracker.IssueKind.Bug,
+    ReporterName = $who,
+    IssueTracker.Issue_Reporter = [%CurrentUser%]);
+  show page IssueTracker.Issue_NewEdit($Issue = $Issue);
+  return true;
+end;
+/
+
+/**
+ * Assigns an issue to the signed-in user and moves it into progress.
+ *
+ * @param $Issue The issue to claim
+ * @returns true when claimed
+ */
+create or replace microflow IssueTracker.ACT_Issue_ClaimForMe ($Issue: IssueTracker.Issue)
+returns boolean as $ok
+folder 'Issue'
+begin
+  $who = call microflow IssueTracker.SUB_CurrentUserName ();
+  change $Issue (
+    IssueTracker.Issue_Assignee = [%CurrentUser%],
+    AssigneeName = $who,
+    Status = IssueTracker.IssueStatus.InProgress) commit refresh;
+  return true;
+end;
+/
+
+/**
+ * Creates a comment on an issue attributed to the signed-in user and opens the
+ * entry pop-up.
+ *
+ * @param $Issue The issue being commented on
+ * @returns true once the pop-up has been opened
+ */
+create or replace microflow IssueTracker.ACT_Comment_New ($Issue: IssueTracker.Issue)
+returns boolean as $ok
+folder 'Issue'
+begin
+  $who = call microflow IssueTracker.SUB_CurrentUserName ();
+  $Comment = create IssueTracker.Comment (
+    AuthorName = $who,
+    IssueTracker.Comment_Issue = $Issue,
+    IssueTracker.Comment_Author = [%CurrentUser%]);
+  show page IssueTracker.Comment_New($Comment = $Comment);
+  return true;
+end;
+/
+
+-- -----------------------------------------------------------------------------
+-- Workflow step helpers — called from the workflow body with $workflowContext
+-- -----------------------------------------------------------------------------
+
+/**
+ * Marks an issue as triaged and ready to be worked.
+ *
+ * @param $Issue The workflow context issue
+ * @returns true
+ */
+create or replace microflow IssueTracker.SUB_Issue_SetTriaged ($Issue: IssueTracker.Issue)
+folder 'Workflow'
+begin
+  if $Issue/Priority = IssueTracker.IssuePriority.Critical then
+    change $Issue (
+      Status = IssueTracker.IssueStatus.Triaged,
+      IsEscalated = true) commit;
+    log warning node 'IssueTracker' 'Critical issue escalated at triage: ' + toString($Issue/Number);
+  else
+    change $Issue (Status = IssueTracker.IssueStatus.Triaged) commit;
+  end if;
+end;
+/
+
+/**
+ * Records that an issue was rejected during triage.
+ *
+ * @param $Issue The workflow context issue
+ * @returns true
+ */
+create or replace microflow IssueTracker.SUB_Issue_SetRejected ($Issue: IssueTracker.Issue)
+folder 'Workflow'
+begin
+  change $Issue (
+    Status = IssueTracker.IssueStatus.Rejected,
+    ResolvedOn = [%CurrentDateTime%]) commit;
+end;
+/
+
+/**
+ * Flags a critical issue as escalated. Called from the workflow's priority
+ * decision, so escalation is visible on the board without a separate field.
+ *
+ * @param $Issue The workflow context issue
+ * @returns true
+ */
+create or replace microflow IssueTracker.SUB_Issue_Escalate ($Issue: IssueTracker.Issue)
+folder 'Workflow'
+begin
+  change $Issue (IsEscalated = true) commit;
+  log warning node 'IssueTracker' 'Escalated critical issue ' + toString($Issue/Number);
+end;
+/
+
+/**
+ * Closes an issue after successful verification.
+ *
+ * @param $Issue The workflow context issue
+ * @returns true
+ */
+create or replace microflow IssueTracker.SUB_Issue_SetClosed ($Issue: IssueTracker.Issue)
+folder 'Workflow'
+begin
+  change $Issue (Status = IssueTracker.IssueStatus.Closed) commit;
+end;
+/
+
+-- -----------------------------------------------------------------------------
+-- Validation
+-- -----------------------------------------------------------------------------
+
+/**
+ * Before-commit guard for Issue.
+ *
+ * Rejects a blank title and a resolution recorded without notes, so bad data
+ * cannot reach the database regardless of which page or microflow wrote it.
+ *
+ * @param $Issue The issue being committed
+ * @returns true when the issue is valid
+ */
+create or replace microflow IssueTracker.VAL_Issue_BeforeCommit ($Issue: IssueTracker.Issue)
+returns boolean as $valid
+folder 'Validation'
+begin
+  if trim($Issue/Title) = '' then
+    validation feedback $Issue/Title message 'A title is required.';
+    return false;
+  end if;
+
+  if $Issue/Status = IssueTracker.IssueStatus.Resolved and $Issue/ResolutionNotes = empty then
+    validation feedback $Issue/ResolutionNotes message 'Explain how this was resolved before marking it resolved.';
+    return false;
+  end if;
+
+  return true;
+end;
+/
